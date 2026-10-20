@@ -202,17 +202,43 @@ where
     /// transferred.
     #[inline(always)]
     fn cpu_access(&mut self, acc: &CpuAccess, ticks: &mut Ticks) -> Result<(Long, u32)> {
-        // Reads that hit in logically tagged caches need no translation.
-        // Data breakpoints need the physical address: they skip this.
         if acc.wdata.is_none()
-            && (acc.kind == AccessKind::Fetch || self.breakpoints.is_empty())
-            && let Some(res) =
-                self.caches
-                    .read_hit(self.regs.cacr, acc, ticks, &mut self.history_current)
+            && let Some(res) = self.read_hit(acc.kind, acc.fault.fc, acc.laddr, acc.size, ticks)
         {
             return Ok(res);
         }
+        self.cpu_access_translated(acc, ticks)
+    }
 
+    /// Runs a read from logically tagged caches, before translation, if
+    /// they hold it: see CpuCaches::read_hit(). Data breakpoints need the
+    /// physical address: data reads skip this when any is set.
+    #[inline(always)]
+    fn read_hit(
+        &mut self,
+        kind: AccessKind,
+        fc: u8,
+        laddr: Address,
+        size: u32,
+        ticks: &mut Ticks,
+    ) -> Option<(Long, u32)> {
+        if kind != AccessKind::Fetch && !self.breakpoints.is_empty() {
+            return None;
+        }
+        self.caches.read_hit(
+            self.regs.cacr,
+            kind,
+            fc,
+            laddr,
+            size,
+            ticks,
+            &mut self.history_current,
+        )
+    }
+
+    /// cpu_access() past the caches' read hits
+    #[inline(never)]
+    fn cpu_access_translated(&mut self, acc: &CpuAccess, ticks: &mut Ticks) -> Result<(Long, u32)> {
         // The bus controller finishes the last write first
         self.write_credit = 0;
         let tr = self.translate(acc)?;
@@ -338,7 +364,24 @@ where
     fn read_operand(&mut self, kind: AccessKind, fault: FaultInfo, len: u32) -> Result<Long> {
         let o_addr = fault.o_addr;
         if (o_addr & 3) + len <= 4 {
-            // The operand is within a long word: a single access
+            let mut ticks = 0;
+            if let Some((data, _)) =
+                self.read_hit(kind, fault.fc, o_addr & ADDRESS_MASK, len, &mut ticks)
+            {
+                self.advance_cycles(ticks)?;
+                return Ok(data);
+            }
+        }
+        self.read_operand_slow(kind, fault, len)
+    }
+
+    /// read_operand() past the cache hits
+    #[inline(never)]
+    fn read_operand_slow(&mut self, kind: AccessKind, fault: FaultInfo, len: u32) -> Result<Long> {
+        let o_addr = fault.o_addr;
+        if (o_addr & 3) + len <= 4 {
+            // The operand is within a long word: a single access, which
+            // missed in the caches
             let mut ticks = 0;
             let acc = CpuAccess {
                 kind,
@@ -347,7 +390,7 @@ where
                 size: len,
                 wdata: None,
             };
-            let (data, _) = self.cpu_access(&acc, &mut ticks)?;
+            let data = self.cpu_access_translated(&acc, &mut ticks)?.0;
             self.advance_cycles(ticks)?;
             return Ok(data);
         }
@@ -457,7 +500,7 @@ where
 
     /// Writes the low `len` bytes (1-4, a 3-byte operand included) of
     /// `value` with as many bus cycles as the port sizes need (68020+).
-    #[inline(always)]
+    #[inline(never)]
     fn write_operand(
         &mut self,
         kind: AccessKind,
