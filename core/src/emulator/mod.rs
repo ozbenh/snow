@@ -1470,9 +1470,14 @@ impl Tickable for Emulator {
                     }
                     #[cfg(feature = "ethernet")]
                     EmulatorCommand::EthernetSetLink(idx, link) => {
-                        self.eth_port_mut(idx)
+                        if let Err(e) = self
+                            .eth_port_mut(idx)
                             .context("Setting link on non-ethernet device")?
-                            .set_link(link)?;
+                            .set_link(link)
+                        {
+                            self.user_error(&format!("{}: {}", idx, e));
+                        }
+                        self.status_update()?;
                     }
                     #[cfg(feature = "ethernet")]
                     EmulatorCommand::EthernetStartCapture(idx, filename) => {
