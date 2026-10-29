@@ -57,6 +57,8 @@ pub enum EmulatorCommand {
     #[cfg(feature = "ethernet")]
     EthernetSetLink(NetAdapterId, EthernetLinkType),
     #[cfg(feature = "ethernet")]
+    EthernetSetMac(NetAdapterId, [u8; 6]),
+    #[cfg(feature = "ethernet")]
     EthernetStartCapture(NetAdapterId, PathBuf),
     #[cfg(feature = "ethernet")]
     EthernetStopCapture(NetAdapterId),

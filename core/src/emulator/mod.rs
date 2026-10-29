@@ -1480,6 +1480,17 @@ impl Tickable for Emulator {
                         self.status_update()?;
                     }
                     #[cfg(feature = "ethernet")]
+                    EmulatorCommand::EthernetSetMac(idx, mac) => {
+                        if let Err(e) = self
+                            .eth_port_mut(idx)
+                            .context("Setting MAC address on non-ethernet device")?
+                            .set_mac(mac)
+                        {
+                            self.user_error(&format!("{}: {}", idx, e));
+                        }
+                        self.status_update()?;
+                    }
+                    #[cfg(feature = "ethernet")]
                     EmulatorCommand::EthernetStartCapture(idx, filename) => {
                         match self
                             .eth_port_mut(idx)

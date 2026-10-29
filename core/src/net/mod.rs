@@ -162,6 +162,19 @@ impl EthernetPort {
         self.mac
     }
 
+    /// Changes the MAC address, restarting a running link so the host
+    /// side filters on the new one
+    pub fn set_mac(&mut self, mac: [u8; 6]) -> Result<()> {
+        if mac == self.mac {
+            return Ok(());
+        }
+        self.mac = mac;
+        if self.connected() {
+            self.set_link(self.link())?;
+        }
+        Ok(())
+    }
+
     /// Sends a frame to the network
     pub fn send(&mut self, packet: &[u8]) {
         if self.rx.is_none() && self.tx.is_none() && self.link != EthernetLinkType::Down {

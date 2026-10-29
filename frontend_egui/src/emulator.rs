@@ -164,7 +164,7 @@ pub struct EmulatorState {
 
     /// Ethernet adapters that appeared in the status since the last check
     #[cfg(feature = "ethernet")]
-    new_ethernet_adapters: Vec<NetAdapterId>,
+    new_ethernet_adapters: Vec<EthernetStatus>,
 }
 
 impl EmulatorState {
@@ -585,7 +585,7 @@ impl EmulatorState {
                             .as_ref()
                             .is_some_and(|old| old.ethernet.iter().any(|o| o.id == eth.id));
                         if !known {
-                            self.new_ethernet_adapters.push(eth.id);
+                            self.new_ethernet_adapters.push(eth.clone());
                         }
                     }
                     self.status = Some(*s);
@@ -753,7 +753,7 @@ impl EmulatorState {
     /// Takes the Ethernet adapters that appeared since the last call: those
     /// of a newly started or restored emulator, or a newly attached one
     #[cfg(feature = "ethernet")]
-    pub fn take_new_ethernet_adapters(&mut self) -> Vec<NetAdapterId> {
+    pub fn take_new_ethernet_adapters(&mut self) -> Vec<EthernetStatus> {
         std::mem::take(&mut self.new_ethernet_adapters)
     }
 
@@ -1353,6 +1353,17 @@ impl EmulatorState {
 
         sender
             .send(EmulatorCommand::EthernetSetLink(id, link))
+            .unwrap();
+    }
+
+    #[cfg(feature = "ethernet")]
+    pub fn set_eth_mac(&self, id: NetAdapterId, mac: [u8; 6]) {
+        let Some(ref sender) = self.cmdsender else {
+            return;
+        };
+
+        sender
+            .send(EmulatorCommand::EthernetSetMac(id, mac))
             .unwrap();
     }
 

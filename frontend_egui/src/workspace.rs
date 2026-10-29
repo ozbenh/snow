@@ -188,6 +188,14 @@ struct WorkspaceEthernetLink {
     link: WorkspaceEthernetLinkType,
 }
 
+/// MAC address of one Ethernet adapter
+#[cfg(feature = "ethernet")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkspaceEthernetMac {
+    adapter: NetAdapterId,
+    mac: [u8; 6],
+}
+
 #[cfg(feature = "ethernet")]
 impl From<EthernetLinkType> for WorkspaceEthernetLinkType {
     fn from(ty: EthernetLinkType) -> Self {
@@ -316,6 +324,10 @@ pub struct Workspace {
     #[cfg(feature = "ethernet")]
     ethernet_links: Vec<WorkspaceEthernetLink>,
 
+    /// MAC address per Ethernet adapter
+    #[cfg(feature = "ethernet")]
+    ethernet_macs: Vec<WorkspaceEthernetMac>,
+
     /// Serial bridges per SCC channel (index 0 = Channel A, index 1 = Channel B)
     pub serial_bridges: [Option<SerialBridgeConfig>; 2],
 }
@@ -356,6 +368,8 @@ impl Default for Workspace {
             ethernet_link_type: WorkspaceEthernetLinkType::default(),
             #[cfg(feature = "ethernet")]
             ethernet_links: Vec::new(),
+            #[cfg(feature = "ethernet")]
+            ethernet_macs: Vec::new(),
             serial_bridges: [None, None],
         }
     }
@@ -554,6 +568,24 @@ impl Workspace {
             .map_or(&self.ethernet_link_type, |l| &l.link)
             .clone()
             .into()
+    }
+
+    #[cfg(feature = "ethernet")]
+    pub fn get_ethernet_mac(&self, adapter: NetAdapterId) -> Option<[u8; 6]> {
+        self.ethernet_macs
+            .iter()
+            .find(|m| m.adapter == adapter)
+            .map(|m| m.mac)
+    }
+
+    #[cfg(feature = "ethernet")]
+    pub fn set_ethernet_mac(&mut self, adapter: NetAdapterId, mac: [u8; 6]) {
+        match self.ethernet_macs.iter_mut().find(|m| m.adapter == adapter) {
+            Some(m) => m.mac = mac,
+            None => self
+                .ethernet_macs
+                .push(WorkspaceEthernetMac { adapter, mac }),
+        }
     }
 
     #[cfg(feature = "ethernet")]

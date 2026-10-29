@@ -3281,9 +3281,14 @@ impl eframe::App for SnowGui {
         if self.emu.poll() {
             // Change in emulator state
             #[cfg(feature = "ethernet")]
-            for id in self.emu.take_new_ethernet_adapters() {
+            for eth in self.emu.take_new_ethernet_adapters() {
+                // The first MAC address an adapter comes up with is kept
+                match self.workspace.get_ethernet_mac(eth.id) {
+                    Some(mac) => self.emu.set_eth_mac(eth.id, mac),
+                    None => self.workspace.set_ethernet_mac(eth.id, eth.mac),
+                }
                 self.emu
-                    .set_eth_link(id, self.workspace.get_ethernet_link_type(id));
+                    .set_eth_link(eth.id, self.workspace.get_ethernet_link_type(eth.id));
             }
             if self.last_running != self.emu.is_running() {
                 self.last_running = self.emu.is_running();
