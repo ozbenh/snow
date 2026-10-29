@@ -107,9 +107,9 @@ pub(crate) trait ScsiTarget: Send + Debuggable {
     }
 
     #[cfg(feature = "ethernet")]
-    fn eth_set_link(&mut self, link: super::ethernet::EthernetLinkType) -> Result<()>;
+    fn eth_set_link(&mut self, link: crate::net::EthernetLinkType) -> Result<()>;
     #[cfg(feature = "ethernet")]
-    fn eth_link(&self) -> Option<super::ethernet::EthernetLinkType>;
+    fn eth_link(&self) -> Option<crate::net::EthernetLinkType>;
     #[cfg(feature = "ethernet")]
     fn eth_start_capture(&mut self, _filename: &Path) -> Result<()> {
         anyhow::bail!("Not an ethernet device")

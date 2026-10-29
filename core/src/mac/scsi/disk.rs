@@ -274,12 +274,12 @@ impl ScsiTarget for ScsiTargetDisk {
     }
 
     #[cfg(feature = "ethernet")]
-    fn eth_set_link(&mut self, _link: super::ethernet::EthernetLinkType) -> Result<()> {
+    fn eth_set_link(&mut self, _link: crate::net::EthernetLinkType) -> Result<()> {
         unreachable!()
     }
 
     #[cfg(feature = "ethernet")]
-    fn eth_link(&self) -> Option<super::ethernet::EthernetLinkType> {
+    fn eth_link(&self) -> Option<crate::net::EthernetLinkType> {
         None
     }
 }

@@ -11,10 +11,10 @@ use anyhow::{Context, Result};
 use eframe::egui;
 use serde::{Deserialize, Deserializer, Serialize};
 use snow_core::mac::MacModel;
-#[cfg(feature = "ethernet")]
-use snow_core::mac::scsi::ethernet::EthernetLinkType;
 use snow_core::mac::scsi::target::ScsiTargetType;
 use snow_core::mac::serial_bridge::SerialBridgeConfig;
+#[cfg(feature = "ethernet")]
+use snow_core::net::EthernetLinkType;
 
 /// Custom deserializer that skips invalid shader configs instead of failing entirely
 fn deserialize_shader_configs_lenient<'de, D>(

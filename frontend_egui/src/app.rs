@@ -1668,7 +1668,7 @@ impl SnowGui {
                             id,
                         ),
                         |ui| {
-                            use snow_core::mac::scsi::ethernet::EthernetLinkType;
+                            use snow_core::net::EthernetLinkType;
 
                             ui.set_min_width(Self::SUBMENU_WIDTH);
                             ui.strong("Link type");
