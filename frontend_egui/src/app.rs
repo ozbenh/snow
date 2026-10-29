@@ -2735,12 +2735,6 @@ impl SnowGui {
                 ));
             }
 
-            #[cfg(feature = "ethernet")]
-            for eth in self.emu.get_ethernet_adapters() {
-                self.emu
-                    .set_eth_link(eth.id, self.workspace.get_ethernet_link_type(eth.id));
-            }
-
             // Bridges given on the command line take precedence over the workspace
             for (idx, ch) in [SccCh::A, SccCh::B].into_iter().enumerate() {
                 if self.pending_serial_bridges[idx].is_none()
@@ -3286,6 +3280,11 @@ impl eframe::App for SnowGui {
 
         if self.emu.poll() {
             // Change in emulator state
+            #[cfg(feature = "ethernet")]
+            for id in self.emu.take_new_ethernet_adapters() {
+                self.emu
+                    .set_eth_link(id, self.workspace.get_ethernet_link_type(id));
+            }
             if self.last_running != self.emu.is_running() {
                 self.last_running = self.emu.is_running();
                 self.update_titlebar(ctx);

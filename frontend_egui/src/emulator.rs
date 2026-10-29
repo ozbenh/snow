@@ -161,6 +161,10 @@ pub struct EmulatorState {
 
     /// Currently selected audio device on the host
     host_audio_device: Option<cpal::DeviceId>,
+
+    /// Ethernet adapters that appeared in the status since the last check
+    #[cfg(feature = "ethernet")]
+    new_ethernet_adapters: Vec<NetAdapterId>,
 }
 
 impl EmulatorState {
@@ -574,6 +578,16 @@ impl EmulatorState {
         while let Ok(event) = eventrecv.try_recv() {
             match event {
                 EmulatorEvent::Status(s) => {
+                    #[cfg(feature = "ethernet")]
+                    for eth in &s.ethernet {
+                        let known = self
+                            .status
+                            .as_ref()
+                            .is_some_and(|old| old.ethernet.iter().any(|o| o.id == eth.id));
+                        if !known {
+                            self.new_ethernet_adapters.push(eth.id);
+                        }
+                    }
                     self.status = Some(*s);
                 }
                 EmulatorEvent::NextCode((address, code)) => {
@@ -736,13 +750,11 @@ impl EmulatorState {
         Some(&status.scsi)
     }
 
-    /// Gets the status of all Ethernet adapters
+    /// Takes the Ethernet adapters that appeared since the last call: those
+    /// of a newly started or restored emulator, or a newly attached one
     #[cfg(feature = "ethernet")]
-    pub fn get_ethernet_adapters(&self) -> Vec<EthernetStatus> {
-        self.status
-            .as_ref()
-            .map(|s| s.ethernet.clone())
-            .unwrap_or_default()
+    pub fn take_new_ethernet_adapters(&mut self) -> Vec<NetAdapterId> {
+        std::mem::take(&mut self.new_ethernet_adapters)
     }
 
     /// Gets the status of an Ethernet adapter

@@ -52,7 +52,7 @@ impl ScsiTarget for ScsiTargetEthernet {
 
     #[cfg(feature = "savestates")]
     fn after_deserialize(&mut self, _imgfn: &Path) -> Result<()> {
-        todo!()
+        Ok(())
     }
 
     fn set_blocksize(&mut self, _blocksize: usize) -> bool {
