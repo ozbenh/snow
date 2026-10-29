@@ -16,6 +16,8 @@ use snow_core::cpu_m68k::cpu::{HistoryEntry, SystrapHistoryEntry};
 use snow_core::cpu_m68k::disassembler::{Disassembler, DisassemblyEntry};
 use snow_core::cpu_m68k::regs::{Register, RegisterFile};
 use snow_core::debuggable::DebuggableProperties;
+#[cfg(feature = "ethernet")]
+use snow_core::emulator::comm::EthernetStatus;
 use snow_core::emulator::comm::{
     Breakpoint, EmulatorCommand, EmulatorEvent, EmulatorSpeed, FddStatus, ScsiTargetStatus,
     UserMessageType,
@@ -28,6 +30,8 @@ use snow_core::mac::scsi::target::ScsiTargetType;
 use snow_core::mac::serial_bridge::{SerialBridgeConfig, SerialBridgeStatus};
 use snow_core::mac::swim::drive::DriveType;
 use snow_core::mac::{ExtraROMs, MacModel, MacMonitor, NubusDeviceKind};
+#[cfg(feature = "ethernet")]
+use snow_core::net::NetAdapterId;
 use snow_core::renderer::DisplayBuffer;
 use snow_core::tickable::{Tickable, Ticks};
 use snow_core::types::LatchingEvent;
@@ -732,6 +736,13 @@ impl EmulatorState {
         Some(&status.scsi)
     }
 
+    /// Gets the status of an Ethernet adapter
+    #[cfg(feature = "ethernet")]
+    pub fn get_ethernet_status(&self, id: NetAdapterId) -> Option<EthernetStatus> {
+        let status = self.status.as_ref()?;
+        status.ethernet.iter().find(|e| e.id == id).cloned()
+    }
+
     /// Gets a copy of SCSI targets and loaded media
     pub fn get_scsi_targets(&self) -> Option<ScsiTargets> {
         let status = self.get_scsi_target_status()?;
@@ -1314,7 +1325,7 @@ impl EmulatorState {
     }
 
     #[cfg(feature = "ethernet")]
-    pub fn set_eth_link(&self, id: usize, link: snow_core::net::EthernetLinkType) {
+    pub fn set_eth_link(&self, id: NetAdapterId, link: snow_core::net::EthernetLinkType) {
         let Some(ref sender) = self.cmdsender else {
             return;
         };
@@ -1325,27 +1336,27 @@ impl EmulatorState {
     }
 
     #[cfg(feature = "ethernet")]
-    pub fn start_ethernet_capture<P: AsRef<std::path::Path>>(&self, scsi_id: usize, filename: P) {
+    pub fn start_ethernet_capture<P: AsRef<std::path::Path>>(&self, id: NetAdapterId, filename: P) {
         let Some(ref sender) = self.cmdsender else {
             return;
         };
 
         sender
             .send(EmulatorCommand::EthernetStartCapture(
-                scsi_id,
+                id,
                 filename.as_ref().to_path_buf(),
             ))
             .unwrap();
     }
 
     #[cfg(feature = "ethernet")]
-    pub fn stop_ethernet_capture(&self, scsi_id: usize) {
+    pub fn stop_ethernet_capture(&self, id: NetAdapterId) {
         let Some(ref sender) = self.cmdsender else {
             return;
         };
 
         sender
-            .send(EmulatorCommand::EthernetStopCapture(scsi_id))
+            .send(EmulatorCommand::EthernetStopCapture(id))
             .unwrap();
     }
 

@@ -49,11 +49,15 @@ use log::*;
 use std::fmt;
 
 use crate::cpu_m68k::regs::{Register, RegisterFile};
+#[cfg(feature = "ethernet")]
+use crate::emulator::comm::EthernetStatus;
 use crate::emulator::comm::{EmulatorSpeed, UserMessageType};
 use crate::mac::rtc::Rtc;
 use crate::mac::scsi::bus::ScsiBus;
 use crate::mac::scsi::disk_image::DiskImage;
 use crate::mac::swim::Swim;
+#[cfg(feature = "ethernet")]
+use crate::net::{EthernetPort, NetAdapterId};
 use comm::{
     Breakpoint, EmulatorCommand, EmulatorCommandSender, EmulatorEvent, EmulatorEventReceiver,
     EmulatorStatus, FddStatus, InputRecording, ScsiTargetStatus,
@@ -758,16 +762,10 @@ impl Emulator {
                                 .scsi()
                                 .get_cdrom_folder(i)
                                 .map(|p| p.to_path_buf()),
-                            #[cfg(feature = "ethernet")]
-                            link_type: self.config.scsi().targets[i]
-                                .as_ref()
-                                .and_then(|d| d.eth_link()),
-                            #[cfg(feature = "ethernet")]
-                            capture_status: self.config.scsi().targets[i]
-                                .as_ref()
-                                .and_then(|d| d.eth_capture_status()),
                         })
                 }),
+                #[cfg(feature = "ethernet")]
+                ethernet: self.eth_status(),
                 speed: self.config.speed(),
                 effective_speed: self.config.effective_speed(),
             })))?;
@@ -1020,6 +1018,32 @@ impl Emulator {
     pub fn attach_ethernet(&mut self, id: usize) {
         self.config.scsi_mut().attach_ethernet_at(id);
         info!("SCSI ID #{}: Ethernet controller attached", id);
+    }
+
+    /// The host side of an Ethernet adapter
+    #[cfg(feature = "ethernet")]
+    fn eth_port_mut(&mut self, id: NetAdapterId) -> Option<&mut EthernetPort> {
+        match id {
+            NetAdapterId::Scsi(i) => self
+                .config
+                .scsi_mut()
+                .targets
+                .get_mut(i)?
+                .as_mut()?
+                .eth_port(),
+        }
+    }
+
+    /// Status of all Ethernet adapters
+    #[cfg(feature = "ethernet")]
+    fn eth_status(&self) -> Vec<EthernetStatus> {
+        self.config
+            .scsi()
+            .targets
+            .iter()
+            .enumerate()
+            .filter_map(|(i, t)| Some(t.as_ref()?.eth_port_ref()?.status(NetAdapterId::Scsi(i))))
+            .collect()
     }
 
     #[cfg(feature = "printer")]
@@ -1446,28 +1470,27 @@ impl Tickable for Emulator {
                     }
                     #[cfg(feature = "ethernet")]
                     EmulatorCommand::EthernetSetLink(idx, link) => {
-                        self.config.scsi_mut().targets[idx]
-                            .as_mut()
+                        self.eth_port_mut(idx)
                             .context("Setting link on non-ethernet device")?
-                            .eth_set_link(link)?;
+                            .set_link(link)?;
                     }
                     #[cfg(feature = "ethernet")]
                     EmulatorCommand::EthernetStartCapture(idx, filename) => {
-                        match self.config.scsi_mut().targets[idx]
-                            .as_mut()
+                        match self
+                            .eth_port_mut(idx)
                             .context("No ethernet device attached")?
-                            .eth_start_capture(&filename)
+                            .start_capture(&filename)
                         {
                             Ok(_) => {
                                 self.user_success(&format!(
-                                    "SCSI #{}: Started pcap capture to '{}'",
+                                    "{}: Started pcap capture to '{}'",
                                     idx,
                                     filename.display()
                                 ));
                             }
                             Err(e) => {
                                 self.user_error(&format!(
-                                    "SCSI #{}: Failed to start capture: {}",
+                                    "{}: Failed to start capture: {}",
                                     idx, e
                                 ));
                             }
@@ -1476,21 +1499,21 @@ impl Tickable for Emulator {
                     }
                     #[cfg(feature = "ethernet")]
                     EmulatorCommand::EthernetStopCapture(idx) => {
-                        match self.config.scsi_mut().targets[idx]
-                            .as_mut()
+                        match self
+                            .eth_port_mut(idx)
                             .context("No ethernet device attached")?
-                            .eth_stop_capture()
+                            .stop_capture()
                         {
                             Some((filename, count)) => {
                                 self.user_success(&format!(
-                                    "SCSI #{}: Stopped capture, wrote {} packets to '{}'",
+                                    "{}: Stopped capture, wrote {} packets to '{}'",
                                     idx,
                                     count,
                                     filename.display()
                                 ));
                             }
                             None => {
-                                self.user_warning(&format!("SCSI #{}: No capture was active", idx));
+                                self.user_warning(&format!("{}: No capture was active", idx));
                             }
                         }
                         self.status_update()?;

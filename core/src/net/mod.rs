@@ -10,6 +10,7 @@ mod raw;
 mod tap;
 
 use crate::debuggable::DebuggableProperties;
+use crate::emulator::comm::EthernetStatus;
 use crate::util::{deserialize_arc_rwlock, serialize_arc_rwlock};
 
 use anyhow::Result;
@@ -38,6 +39,21 @@ const PACKET_QUEUE_SIZE: usize = 512;
 /// Locally administered MAC address of the NAT gateway visible from the emulated Mac.
 #[cfg(feature = "ethernet_nat")]
 const NAT_MAC_ADDRESS: [u8; 6] = [0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55];
+
+/// Identifies an emulated Ethernet adapter
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum NetAdapterId {
+    /// SCSI Ethernet adapter at this SCSI ID
+    Scsi(usize),
+}
+
+impl std::fmt::Display for NetAdapterId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Scsi(id) => write!(f, "SCSI #{}", id),
+        }
+    }
+}
 
 /// Link mode for ethernet device
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -202,6 +218,16 @@ impl EthernetPort {
 
     pub fn link(&self) -> EthernetLinkType {
         self.link.clone()
+    }
+
+    /// Status report for the frontend
+    pub fn status(&self, id: NetAdapterId) -> EthernetStatus {
+        EthernetStatus {
+            id,
+            mac: self.mac,
+            link_type: self.link(),
+            capture_status: self.capture_status(),
+        }
     }
 
     pub fn set_link(&mut self, link: EthernetLinkType) -> Result<()> {

@@ -573,16 +573,6 @@ impl ScsiTarget for ScsiTargetPrinter {
             }
         }
     }
-
-    #[cfg(feature = "ethernet")]
-    fn eth_set_link(&mut self, _link: crate::net::EthernetLinkType) -> Result<()> {
-        unreachable!()
-    }
-
-    #[cfg(feature = "ethernet")]
-    fn eth_link(&self) -> Option<crate::net::EthernetLinkType> {
-        None
-    }
 }
 
 impl Debuggable for ScsiTargetPrinter {

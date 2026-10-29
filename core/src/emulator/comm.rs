@@ -16,7 +16,7 @@ use crate::mac::scc::SccCh;
 use crate::mac::scsi::target::ScsiTargetType;
 use crate::mac::serial_bridge::{SerialBridgeConfig, SerialBridgeStatus};
 #[cfg(feature = "ethernet")]
-use crate::net::EthernetLinkType;
+use crate::net::{EthernetLinkType, NetAdapterId};
 use crate::tickable::Ticks;
 
 pub use crate::cpu_m68k::cpu::{Breakpoint, BusBreakpoint};
@@ -55,11 +55,11 @@ pub enum EmulatorCommand {
     #[cfg(feature = "printer")]
     ScsiAttachPrinter(usize, std::path::PathBuf),
     #[cfg(feature = "ethernet")]
-    EthernetSetLink(usize, EthernetLinkType),
+    EthernetSetLink(NetAdapterId, EthernetLinkType),
     #[cfg(feature = "ethernet")]
-    EthernetStartCapture(usize, PathBuf),
+    EthernetStartCapture(NetAdapterId, PathBuf),
     #[cfg(feature = "ethernet")]
-    EthernetStopCapture(usize),
+    EthernetStopCapture(NetAdapterId),
     DetachScsiTarget(usize),
     MouseUpdateAbsolute {
         x: u16,
@@ -140,6 +140,8 @@ pub struct EmulatorStatus {
     pub speed: EmulatorSpeed,
     pub effective_speed: f64,
     pub scsi: [Option<ScsiTargetStatus>; 7],
+    #[cfg(feature = "ethernet")]
+    pub ethernet: Vec<EthernetStatus>,
 }
 
 #[cfg(feature = "ethernet")]
@@ -151,6 +153,16 @@ pub struct EthernetCaptureStatus {
     pub error: Option<String>,
 }
 
+/// Status of an emulated Ethernet adapter
+#[cfg(feature = "ethernet")]
+#[derive(Debug, Clone)]
+pub struct EthernetStatus {
+    pub id: NetAdapterId,
+    pub mac: [u8; 6],
+    pub link_type: EthernetLinkType,
+    pub capture_status: Option<EthernetCaptureStatus>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScsiTargetStatus {
     pub target_type: ScsiTargetType,
@@ -158,10 +170,6 @@ pub struct ScsiTargetStatus {
     /// Toolbox-managed image folder for a folder-backed CD-ROM, if any.
     pub cdrom_folder: Option<PathBuf>,
     pub capacity: Option<usize>,
-    #[cfg(feature = "ethernet")]
-    pub link_type: Option<EthernetLinkType>,
-    #[cfg(feature = "ethernet")]
-    pub capture_status: Option<EthernetCaptureStatus>,
 }
 
 #[derive(Debug, Clone)]

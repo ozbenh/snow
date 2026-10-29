@@ -1,18 +1,17 @@
 //! Daynaport SCSI Ethernet adapter
 
 use crate::debuggable::{Debuggable, DebuggableProperties};
-use crate::emulator::comm::EthernetCaptureStatus;
 use crate::mac::scsi::STATUS_CHECK_CONDITION;
 use crate::mac::scsi::STATUS_GOOD;
 use crate::mac::scsi::ScsiCmdResult;
 use crate::mac::scsi::target::{ScsiTarget, ScsiTargetCommon, ScsiTargetEvent, ScsiTargetType};
-use crate::net::{EthernetLinkType, EthernetPort};
+use crate::net::EthernetPort;
 
 use anyhow::Result;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// DaynaPORT SCSI/Link Ethernet adapter
 #[derive(Serialize, Deserialize)]
@@ -292,24 +291,12 @@ impl ScsiTarget for ScsiTargetEthernet {
         }
     }
 
-    fn eth_set_link(&mut self, link: EthernetLinkType) -> Result<()> {
-        self.port.set_link(link)
+    fn eth_port(&mut self) -> Option<&mut EthernetPort> {
+        Some(&mut self.port)
     }
 
-    fn eth_link(&self) -> Option<EthernetLinkType> {
-        Some(self.port.link())
-    }
-
-    fn eth_start_capture(&mut self, filename: &Path) -> Result<()> {
-        self.port.start_capture(filename)
-    }
-
-    fn eth_stop_capture(&mut self) -> Option<(PathBuf, usize)> {
-        self.port.stop_capture()
-    }
-
-    fn eth_capture_status(&self) -> Option<EthernetCaptureStatus> {
-        self.port.capture_status()
+    fn eth_port_ref(&self) -> Option<&EthernetPort> {
+        Some(&self.port)
     }
 }
 

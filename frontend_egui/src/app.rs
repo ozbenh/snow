@@ -21,12 +21,16 @@ use crate::widgets::watchpoints::WatchpointsWidget;
 use crate::workspace::{FramebufferMode, Workspace};
 use snow_core::bus::Address;
 use snow_core::emulator::MouseMode;
+#[cfg(feature = "ethernet")]
+use snow_core::emulator::comm::EthernetStatus;
 use snow_core::emulator::comm::{EmulatorSpeed, UserMessageType};
 use snow_core::emulator::save::{SaveHeader, load_state_header};
 use snow_core::mac::MacModel;
 use snow_core::mac::scc::SccCh;
 use snow_core::mac::scsi::target::ScsiTargetType;
 use snow_core::mac::serial_bridge::SerialBridgeConfig;
+#[cfg(feature = "ethernet")]
+use snow_core::net::NetAdapterId;
 use snow_floppy::loaders::{FloppyImageLoader, FloppyImageSaver, ImageType};
 use snow_floppy::{Floppy, FloppyImage, FloppyType, OriginalTrackType};
 
@@ -223,7 +227,7 @@ pub struct SnowGui {
     #[cfg(feature = "ethernet")]
     pcap_capture_dialog: SnowFileDialog,
     #[cfg(feature = "ethernet")]
-    pcap_capture_dialog_idx: usize,
+    pcap_capture_dialog_idx: NetAdapterId,
 
     error_dialog_open: bool,
     error_string: String,
@@ -480,7 +484,7 @@ impl SnowGui {
                 .default_save_extension("pcap")
                 .initial_directory(Self::default_dir()),
             #[cfg(feature = "ethernet")]
-            pcap_capture_dialog_idx: 0,
+            pcap_capture_dialog_idx: NetAdapterId::Scsi(0),
 
             error_dialog_open: false,
             error_string: String::new(),
@@ -1515,6 +1519,106 @@ impl SnowGui {
         });
     }
 
+    /// Link and capture controls of an Ethernet adapter
+    #[cfg(feature = "ethernet")]
+    fn draw_ethernet_menu(&mut self, ui: &mut egui::Ui, eth: &EthernetStatus) {
+        use snow_core::net::EthernetLinkType;
+
+        ui.strong("Link type");
+
+        let link_type = eth.link_type.clone();
+        let mut new_link_type = link_type.clone();
+        ui.radio_value(&mut new_link_type, EthernetLinkType::Down, "Down");
+        #[cfg(feature = "ethernet_nat")]
+        {
+            ui.radio_value(&mut new_link_type, EthernetLinkType::NAT, "NAT");
+        }
+        #[cfg(feature = "ethernet_nat_https_stripping")]
+        {
+            ui.radio_value(
+                &mut new_link_type,
+                EthernetLinkType::NATHttpsStripping,
+                "NAT (HTTPS stripping)",
+            );
+        }
+        #[cfg(feature = "ethernet_raw")]
+        {
+            for interface in pnet::datalink::interfaces()
+                .into_iter()
+                .filter(|i| i.is_up() && !i.ips.is_empty() && !i.is_loopback())
+            {
+                ui.radio_value(
+                    &mut new_link_type,
+                    EthernetLinkType::Bridge(interface.index),
+                    format!("Bridge: {}", interface.name),
+                );
+            }
+        }
+        #[cfg(all(feature = "ethernet_tap", target_os = "linux"))]
+        {
+            let tap_devices: Vec<_> = pnet::datalink::interfaces()
+                .into_iter()
+                .filter(|i| i.name.starts_with("tap") || i.name.starts_with("snow"))
+                .collect();
+
+            if tap_devices.is_empty() {
+                ui.weak("TAP devices: No TAP devices found");
+            } else {
+                for interface in tap_devices {
+                    ui.radio_value(
+                        &mut new_link_type,
+                        EthernetLinkType::TapBridge(interface.name.clone()),
+                        format!("TAP device: {}", interface.name),
+                    );
+                }
+            }
+        }
+
+        if new_link_type != link_type {
+            self.workspace.set_ethernet_link_type(new_link_type.clone());
+            self.emu.set_eth_link(eth.id, new_link_type);
+        }
+
+        ui.separator();
+        ui.strong("Packet capture");
+
+        let capture_active = eth
+            .capture_status
+            .as_ref()
+            .map(|s| s.active)
+            .unwrap_or(false);
+
+        if capture_active {
+            // Show capture information
+            if let Some(capture) = &eth.capture_status {
+                ui.label(format!(
+                    "Capturing to: {}",
+                    capture
+                        .filename
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("(unknown)")
+                ));
+                ui.label(format!("Packets: {}", capture.packet_count));
+
+                if let Some(error) = &capture.error {
+                    ui.colored_label(egui::Color32::RED, format!("Error: {}", error));
+                }
+            }
+
+            if ui.button("Stop capture").clicked() {
+                self.emu.stop_ethernet_capture(eth.id);
+                ui.close_kind(egui::UiKind::Menu);
+            }
+        } else if ui.button("Start capture...").clicked() {
+            self.pcap_capture_dialog_idx = eth.id;
+            self.pcap_capture_dialog
+                .save_file(self.settings.native_file_dialogs);
+            ui.close_kind(egui::UiKind::Menu);
+        }
+    }
+
     fn draw_scsi_target_menu(
         &mut self,
         ui: &mut egui::Ui,
@@ -1668,109 +1772,12 @@ impl SnowGui {
                             id,
                         ),
                         |ui| {
-                            use snow_core::net::EthernetLinkType;
-
                             ui.set_min_width(Self::SUBMENU_WIDTH);
-                            ui.strong("Link type");
-
-                            let link_type = target.link_type.clone().unwrap();
-                            let mut new_link_type = link_type.clone();
-                            ui.radio_value(&mut new_link_type, EthernetLinkType::Down, "Down");
-                            #[cfg(feature = "ethernet_nat")]
+                            if let Some(eth) = self.emu.get_ethernet_status(NetAdapterId::Scsi(id))
                             {
-                                ui.radio_value(&mut new_link_type, EthernetLinkType::NAT, "NAT");
+                                self.draw_ethernet_menu(ui, &eth);
+                                ui.separator();
                             }
-                            #[cfg(feature = "ethernet_nat_https_stripping")]
-                            {
-                                ui.radio_value(
-                                    &mut new_link_type,
-                                    EthernetLinkType::NATHttpsStripping,
-                                    "NAT (HTTPS stripping)",
-                                );
-                            }
-                            #[cfg(feature = "ethernet_raw")]
-                            {
-                                for interface in pnet::datalink::interfaces()
-                                    .into_iter()
-                                    .filter(|i| i.is_up() && !i.ips.is_empty() && !i.is_loopback())
-                                {
-                                    ui.radio_value(
-                                        &mut new_link_type,
-                                        EthernetLinkType::Bridge(interface.index),
-                                        format!("Bridge: {}", interface.name),
-                                    );
-                                }
-                            }
-                            #[cfg(all(feature = "ethernet_tap", target_os = "linux"))]
-                            {
-                                let tap_devices: Vec<_> = pnet::datalink::interfaces()
-                                    .into_iter()
-                                    .filter(|i| {
-                                        i.name.starts_with("tap") || i.name.starts_with("snow")
-                                    })
-                                    .collect();
-
-                                if tap_devices.is_empty() {
-                                    ui.weak("TAP devices: No TAP devices found");
-                                } else {
-                                    for interface in tap_devices {
-                                        ui.radio_value(
-                                            &mut new_link_type,
-                                            EthernetLinkType::TapBridge(interface.name.clone()),
-                                            format!("TAP device: {}", interface.name),
-                                        );
-                                    }
-                                }
-                            }
-
-                            if new_link_type != link_type {
-                                self.workspace.set_ethernet_link_type(new_link_type.clone());
-                                self.emu.set_eth_link(id, new_link_type);
-                            }
-
-                            ui.separator();
-                            ui.strong("Packet capture");
-
-                            let capture_active = target
-                                .capture_status
-                                .as_ref()
-                                .map(|s| s.active)
-                                .unwrap_or(false);
-
-                            if capture_active {
-                                // Show capture information
-                                if let Some(capture) = &target.capture_status {
-                                    ui.label(format!(
-                                        "Capturing to: {}",
-                                        capture
-                                            .filename
-                                            .as_ref()
-                                            .and_then(|p| p.file_name())
-                                            .and_then(|n| n.to_str())
-                                            .unwrap_or("(unknown)")
-                                    ));
-                                    ui.label(format!("Packets: {}", capture.packet_count));
-
-                                    if let Some(error) = &capture.error {
-                                        ui.colored_label(
-                                            egui::Color32::RED,
-                                            format!("Error: {}", error),
-                                        );
-                                    }
-                                }
-
-                                if ui.button("Stop capture").clicked() {
-                                    self.emu.stop_ethernet_capture(id);
-                                    ui.close_kind(egui::UiKind::Menu);
-                                }
-                            } else if ui.button("Start capture...").clicked() {
-                                self.pcap_capture_dialog_idx = id;
-                                self.pcap_capture_dialog
-                                    .save_file(self.settings.native_file_dialogs);
-                                ui.close_kind(egui::UiKind::Menu);
-                            }
-
-                            ui.separator();
                             if ui.button("Detach").clicked() {
                                 self.emu.scsi_detach_target(id);
                             }
@@ -2734,8 +2741,10 @@ impl SnowGui {
                     .enumerate()
                     .find(|(_, t)| t.target_type == Some(ScsiTargetType::Ethernet))
             {
-                self.emu
-                    .set_eth_link(id, self.workspace.get_ethernet_link_type());
+                self.emu.set_eth_link(
+                    NetAdapterId::Scsi(id),
+                    self.workspace.get_ethernet_link_type(),
+                );
             }
 
             // Bridges given on the command line take precedence over the workspace
