@@ -14,7 +14,7 @@ use snow_core::mac::MacModel;
 use snow_core::mac::scsi::target::ScsiTargetType;
 use snow_core::mac::serial_bridge::SerialBridgeConfig;
 #[cfg(feature = "ethernet")]
-use snow_core::net::EthernetLinkType;
+use snow_core::net::{EthernetLinkType, NetAdapterId};
 
 /// Custom deserializer that skips invalid shader configs instead of failing entirely
 fn deserialize_shader_configs_lenient<'de, D>(
@@ -180,6 +180,14 @@ impl Default for WorkspaceEthernetLinkType {
     }
 }
 
+/// Ethernet link type of one adapter
+#[cfg(feature = "ethernet")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkspaceEthernetLink {
+    adapter: NetAdapterId,
+    link: WorkspaceEthernetLinkType,
+}
+
 #[cfg(feature = "ethernet")]
 impl From<EthernetLinkType> for WorkspaceEthernetLinkType {
     fn from(ty: EthernetLinkType) -> Self {
@@ -301,8 +309,12 @@ pub struct Workspace {
     #[serde(deserialize_with = "deserialize_shader_configs_lenient")]
     pub shader_configs: Vec<ShaderConfig>,
 
-    /// Ethernet link type
-    pub ethernet_link_type: WorkspaceEthernetLinkType,
+    /// Ethernet link type of adapters without their own setting
+    ethernet_link_type: WorkspaceEthernetLinkType,
+
+    /// Ethernet link type per adapter
+    #[cfg(feature = "ethernet")]
+    ethernet_links: Vec<WorkspaceEthernetLink>,
 
     /// Serial bridges per SCC channel (index 0 = Channel A, index 1 = Channel B)
     pub serial_bridges: [Option<SerialBridgeConfig>; 2],
@@ -342,6 +354,8 @@ impl Default for Workspace {
             shader_enabled: false,
             shader_configs: Vec::new(),
             ethernet_link_type: WorkspaceEthernetLinkType::default(),
+            #[cfg(feature = "ethernet")]
+            ethernet_links: Vec::new(),
             serial_bridges: [None, None],
         }
     }
@@ -533,13 +547,28 @@ impl Workspace {
     }
 
     #[cfg(feature = "ethernet")]
-    pub fn get_ethernet_link_type(&self) -> EthernetLinkType {
-        self.ethernet_link_type.clone().into()
+    pub fn get_ethernet_link_type(&self, adapter: NetAdapterId) -> EthernetLinkType {
+        self.ethernet_links
+            .iter()
+            .find(|l| l.adapter == adapter)
+            .map_or(&self.ethernet_link_type, |l| &l.link)
+            .clone()
+            .into()
     }
 
     #[cfg(feature = "ethernet")]
-    pub fn set_ethernet_link_type(&mut self, ethernet_link_type: EthernetLinkType) {
-        self.ethernet_link_type = ethernet_link_type.into();
+    pub fn set_ethernet_link_type(&mut self, adapter: NetAdapterId, link: EthernetLinkType) {
+        let link = link.into();
+        match self
+            .ethernet_links
+            .iter_mut()
+            .find(|l| l.adapter == adapter)
+        {
+            Some(l) => l.link = link,
+            None => self
+                .ethernet_links
+                .push(WorkspaceEthernetLink { adapter, link }),
+        }
     }
 
     /// Persists a window location

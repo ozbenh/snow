@@ -1575,7 +1575,8 @@ impl SnowGui {
         }
 
         if new_link_type != link_type {
-            self.workspace.set_ethernet_link_type(new_link_type.clone());
+            self.workspace
+                .set_ethernet_link_type(eth.id, new_link_type.clone());
             self.emu.set_eth_link(eth.id, new_link_type);
         }
 
@@ -2735,16 +2736,9 @@ impl SnowGui {
             }
 
             #[cfg(feature = "ethernet")]
-            if let Some(scsi) = self.emu.get_scsi_targets()
-                && let Some((id, _)) = scsi
-                    .iter()
-                    .enumerate()
-                    .find(|(_, t)| t.target_type == Some(ScsiTargetType::Ethernet))
-            {
-                self.emu.set_eth_link(
-                    NetAdapterId::Scsi(id),
-                    self.workspace.get_ethernet_link_type(),
-                );
+            for eth in self.emu.get_ethernet_adapters() {
+                self.emu
+                    .set_eth_link(eth.id, self.workspace.get_ethernet_link_type(eth.id));
             }
 
             // Bridges given on the command line take precedence over the workspace

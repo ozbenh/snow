@@ -736,6 +736,15 @@ impl EmulatorState {
         Some(&status.scsi)
     }
 
+    /// Gets the status of all Ethernet adapters
+    #[cfg(feature = "ethernet")]
+    pub fn get_ethernet_adapters(&self) -> Vec<EthernetStatus> {
+        self.status
+            .as_ref()
+            .map(|s| s.ethernet.clone())
+            .unwrap_or_default()
+    }
+
     /// Gets the status of an Ethernet adapter
     #[cfg(feature = "ethernet")]
     pub fn get_ethernet_status(&self, id: NetAdapterId) -> Option<EthernetStatus> {
