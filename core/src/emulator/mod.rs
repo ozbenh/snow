@@ -1031,18 +1031,27 @@ impl Emulator {
                 .get_mut(i)?
                 .as_mut()?
                 .eth_port(),
+            NetAdapterId::Builtin => match &mut self.config {
+                EmulatorConfig::Quadra700(cpu) => Some(cpu.bus.sonic.port_mut()),
+                _ => None,
+            },
         }
     }
 
     /// Status of all Ethernet adapters
     #[cfg(feature = "ethernet")]
     fn eth_status(&self) -> Vec<EthernetStatus> {
-        self.config
-            .scsi()
-            .targets
-            .iter()
-            .enumerate()
-            .filter_map(|(i, t)| Some(t.as_ref()?.eth_port_ref()?.status(NetAdapterId::Scsi(i))))
+        let builtin = match &self.config {
+            EmulatorConfig::Quadra700(cpu) => Some(cpu.bus.sonic.port()),
+            _ => None,
+        };
+        let scsi = self.config.scsi().targets.iter().enumerate();
+        builtin
+            .map(|p| p.status(NetAdapterId::Builtin))
+            .into_iter()
+            .chain(scsi.filter_map(|(i, t)| {
+                Some(t.as_ref()?.eth_port_ref()?.status(NetAdapterId::Scsi(i)))
+            }))
             .collect()
     }
 

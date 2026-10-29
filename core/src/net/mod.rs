@@ -47,12 +47,15 @@ const NAT_MAC_ADDRESS: [u8; 6] = [0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55];
 pub enum NetAdapterId {
     /// SCSI Ethernet adapter at this SCSI ID
     Scsi(usize),
+    /// The machine's built-in Ethernet
+    Builtin,
 }
 
 impl std::fmt::Display for NetAdapterId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Scsi(id) => write!(f, "SCSI #{}", id),
+            Self::Builtin => write!(f, "Built-in Ethernet"),
         }
     }
 }

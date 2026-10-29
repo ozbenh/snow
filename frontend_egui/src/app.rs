@@ -940,6 +940,19 @@ impl SnowGui {
                         self.draw_serial_bridge_menu(ui, SccCh::B);
                     },
                 );
+                #[cfg(feature = "ethernet")]
+                if let Some(eth) = self.emu.get_ethernet_status(NetAdapterId::Builtin) {
+                    ui.menu_button(
+                        format!(
+                            "{} Built-in Ethernet",
+                            egui_material_icons::icons::ICON_SETTINGS_ETHERNET
+                        ),
+                        |ui| {
+                            ui.set_min_width(Self::SUBMENU_WIDTH);
+                            self.draw_ethernet_menu(ui, &eth);
+                        },
+                    );
+                }
             });
             ui.menu_button("Tools", |ui| {
                 ui.set_min_width(Self::SUBMENU_WIDTH);

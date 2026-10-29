@@ -254,6 +254,7 @@ impl Sonic {
     /// Writes a register
     pub fn write(&mut self, reg: usize, val: u16, dma: &mut impl SonicDma) {
         let reg = reg & 0x3F;
+        log::trace!("SONIC: write {:02X} = {:04X}", reg, val);
         let in_reset = self.regs[CR] & CR_RST != 0;
         match reg {
             CR => self.command(val, dma),
