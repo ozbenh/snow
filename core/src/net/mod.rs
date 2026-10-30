@@ -17,18 +17,8 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "ethernet_nat")]
 use snow_nat::NatEngineStats;
 
-#[cfg(any(
-    feature = "ethernet_nat",
-    all(feature = "ethernet_tap", target_os = "linux")
-))]
 use std::sync::Arc;
-#[cfg(all(feature = "ethernet_tap", target_os = "linux"))]
-use std::sync::atomic::AtomicBool;
-#[cfg(any(
-    feature = "ethernet_nat",
-    all(feature = "ethernet_tap", target_os = "linux")
-))]
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use pcap::PcapCaptureState;
 #[cfg(all(feature = "ethernet_tap", target_os = "linux"))]
@@ -115,6 +105,11 @@ pub struct EthernetPort {
     #[serde(skip)]
     rx: Option<crossbeam_channel::Receiver<BasicPacket>>,
 
+    /// Whether the adapter's receiver is on. The host side drops the
+    /// frames for the guest while it is off.
+    #[serde(skip, default = "rx_enabled_default")]
+    rx_enabled: Arc<AtomicBool>,
+
     /// Link type
     #[serde(skip)]
     link: EthernetLinkType,
@@ -156,6 +151,7 @@ impl EthernetPort {
             mac,
             tx: None,
             rx: None,
+            rx_enabled: rx_enabled_default(),
             link: Default::default(),
             #[cfg(feature = "ethernet_nat")]
             nat_stats: None,
@@ -258,6 +254,20 @@ impl EthernetPort {
         }
     }
 
+    /// Turns the adapter's receiver on or off. While it is off, the host
+    /// side drops the frames for the guest as they arrive, and the ones
+    /// already queued are dropped.
+    pub fn set_rx_enabled(&mut self, enabled: bool) {
+        self.rx_enabled.store(enabled, Ordering::Relaxed);
+        if !enabled {
+            self.flush_rx();
+        }
+    }
+
+    pub fn rx_enabled(&self) -> bool {
+        self.rx_enabled.load(Ordering::Relaxed)
+    }
+
     /// Drops all received frames
     pub fn flush_rx(&mut self) {
         if let Some(rx) = &self.rx {
@@ -325,6 +335,7 @@ impl EthernetPort {
 
                 let mut nat = snow_nat::NatEngine::new(
                     nat_tx,
+                    self.rx_enabled.clone(),
                     nat_rx,
                     NAT_MAC_ADDRESS,
                     [10, 0, 0, 1],
@@ -346,6 +357,7 @@ impl EthernetPort {
 
                 let mut nat = snow_nat::NatEngine::new(
                     nat_tx,
+                    self.rx_enabled.clone(),
                     nat_rx,
                     NAT_MAC_ADDRESS,
                     [10, 0, 0, 1],
@@ -510,4 +522,8 @@ impl EthernetPort {
     pub(crate) fn rx_len(&self) -> usize {
         self.rx.as_ref().map_or(0, |rx| rx.len())
     }
+}
+
+fn rx_enabled_default() -> Arc<AtomicBool> {
+    Arc::new(AtomicBool::new(true))
 }
