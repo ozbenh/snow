@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow, bail};
 use eframe::egui;
 use sha2::{Digest, Sha256};
 use snow_core::emulator::MouseMode;
-use snow_core::mac::maclc::primetime;
+use snow_core::mac::maclc::primetime_iosb;
 use snow_core::mac::maclc::video as lc_video;
 use snow_core::mac::quadra::dafb;
 use snow_core::mac::swim::drive::DriveType;
@@ -652,7 +652,7 @@ impl ModelSelectionDialog {
                             self.init_args.vram_size.unwrap_or(1024 * 1024),
                         ))
                         .show_ui(ui, |ui| {
-                            for &sz in primetime::VRAM_SIZES {
+                            for &sz in primetime_iosb::VRAM_SIZES {
                                 ui.selectable_value(
                                     &mut self.init_args.vram_size,
                                     Some(sz),

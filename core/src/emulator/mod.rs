@@ -31,7 +31,7 @@ use crate::mac::compact::bus::{CompactMacBus, RAM_DIRTY_PAGESIZE};
 use crate::mac::macii::bus::MacIIBus;
 use crate::mac::maclc::bus::MacLCBus;
 use crate::mac::portable::bus::MacPortableBus;
-use crate::mac::maclc::primetime::Lc475Bus;
+use crate::mac::maclc::primetime_iosb::Lc475Bus;
 use crate::mac::quadra::bus::Quadra700Bus;
 use crate::mac::scc::Scc;
 use crate::mac::scsi::target::ScsiTargetEvent;
