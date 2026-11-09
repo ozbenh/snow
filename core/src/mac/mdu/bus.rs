@@ -55,6 +55,14 @@ const RAM_WRITE_WAITS: Ticks = 1;
 /// doesn't burst (Macintosh IIsi Developer Note, chapter 3).
 const BURST_WAITS: Ticks = 1;
 
+/// Clocks between refreshes of the RAM, every 15.6 us (Developer Note,
+/// chapter 3)
+const REFRESH_PERIOD: Ticks = BUS_FREQUENCY * 156 / 10_000_000;
+
+/// Clocks a refresh holds off the next RAM cycle: it takes six, and can
+/// overlap the previous cycle by one (Developer Note, appendix A)
+const REFRESH_HOLD: Ticks = 5;
+
 /// Wait states of a NuBus transaction, approximate
 const NUBUS_WAITS: Ticks = 4;
 
@@ -68,6 +76,9 @@ const SCC_INTERVAL: Ticks = 13;
 
 /// VIA clock cycles of a period of the 60.15 Hz tick the RBV sends to VIA 1
 const TICK60_PERIOD: Ticks = 13024;
+
+/// Address of RAM bank B
+const BANK_B: Address = 0x0400_0000;
 
 /// The I/O devices repeat every 256 KB in the I/O space
 const IO_MASK: Address = 0x3_FFFF;
@@ -477,11 +488,17 @@ where
         Self::dev_write(addr, val as Byte, self.swim.write(addr, val as Byte))
     }
 
-    /// Wait states of a RAM cycle. A cycle right after a write takes a clock
-    /// more: a write delayed by the previous one takes five clocks
-    /// (Macintosh IIci Developer Note, appendix A), a read six (Macintosh
-    /// IIsi Developer Note, figure 6-9). When overclocking, only the wait
-    /// states of the cycle itself are modelled.
+    /// Wait states of a RAM cycle. It waits for:
+    ///
+    /// - the end of a write: a cycle right after one takes a clock more, a
+    ///   write five clocks (Macintosh IIci Developer Note, appendix A), a
+    ///   read six (Macintosh IIsi Developer Note, figure 6-9);
+    /// - a refresh in progress (Developer Note, chapter 3);
+    /// - in bank A, a burst in progress that the MDU runs for the RBV
+    ///   (Developer Note, chapter 5).
+    ///
+    /// The later cycles of a burst run on in page mode. When overclocking,
+    /// only the wait states of the cycle itself are modelled.
     fn ram_waits(&mut self, acc: &BusAccess<Bus68020>) -> Ticks {
         let waits = if acc.write {
             RAM_WRITE_WAITS
@@ -490,11 +507,18 @@ where
         } else {
             READ_WAITS
         };
-        if self.native_clock.is_overclocking() {
+        if self.native_clock.is_overclocking() || acc.beat == Beat::BurstNext {
             return waits;
         }
         let now = self.native_clock.native_ticks() + acc.pending;
-        let hold = self.ram_ready.saturating_sub(now);
+        let mut hold = self.ram_ready.saturating_sub(now);
+        let since_refresh = (now + hold) % REFRESH_PERIOD;
+        hold += REFRESH_HOLD.saturating_sub(since_refresh);
+        if acc.addr < BANK_B {
+            hold += self
+                .rbv
+                .fetch_hold(acc.pending + hold, self.bus_frequency());
+        }
         if acc.write {
             self.ram_ready = now + hold + Bus68020::CYCLE + waits + 1;
         }
@@ -1047,6 +1071,35 @@ mod tests {
         assert_eq!(read_byte(&mut bus, 0x0440_0010), 0x5A);
         assert_eq!(read_byte(&mut bus, 0x07C0_0010), 0x5A);
         assert_eq!(read(&mut bus, 0x0800_0000), BusResponse::BusError);
+    }
+
+    /// Average wait states of RAM reads at `addr`, back to back for a
+    /// frame
+    fn read_waits(bus: &mut MduBus<NullRenderer>, addr: Address) -> f64 {
+        let reads = 400_000;
+        let mut total = 0;
+        for _ in 0..reads {
+            let waits = match read(bus, addr) {
+                BusResponse::Ack { waits, .. } => waits,
+                r => panic!("{r:?}"),
+            };
+            total += waits;
+            bus.tick(Bus68020::CYCLE + waits, ()).unwrap();
+        }
+        total as f64 / reads as f64
+    }
+
+    /// At 8 bits per pixel the RBV keeps bank A about half the time, the
+    /// refresh is a little in both banks
+    #[test]
+    fn video_slows_bank_a() {
+        let mut bus = bus(8 << 20);
+        let _ = read(&mut bus, 0x4000_0000);
+        write(&mut bus, 0x50F2_6010, 0x03);
+        let a = read_waits(&mut bus, 0x0000_1000);
+        let b = read_waits(&mut bus, 0x0400_1000);
+        assert!(b < READ_WAITS as f64 + 0.1, "bank B {b}");
+        assert!(a > b + 3.0, "bank A {a}, bank B {b}");
     }
 
     /// The ROM finds the MDU by VIA 1 repeating 256 KB above itself but not

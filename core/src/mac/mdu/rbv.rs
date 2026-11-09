@@ -80,6 +80,19 @@ const IRQ_MASK: u8 = 0x1F;
 /// Slot interrupt flag of the built-in video
 const SLOT_VBLANK: u8 = 1 << 6;
 
+/// Bytes of the frame buffer the MDU reads in a burst for the RBV: eight
+/// long words (Macintosh IIci Developer Note, chapter 5)
+const FETCH_BYTES: Ticks = 32;
+
+/// Clocks such a burst keeps bank A: five for the first long word and two
+/// for each of the others, as the bursts of the CPU, and one more to end it
+/// as after a write. It makes the RBV take 6, 13 and 26% of bank A at 1, 2
+/// and 4 bits per pixel on a 13" monitor, and 13 and 26% at 1 and 2 on a
+/// 15" Portrait, as on a IIci (Apple's figures); at 8 bits per pixel on a
+/// 13", and 4 on a Portrait, it takes 51 and 52%, where Apple gives 64 and
+/// 65%.
+const FETCH_CLOCKS: Ticks = 20;
+
 /// Bits of data register B which are inputs, NuBus TM1A and TM0A, here
 /// always high
 const B_INPUTS: u8 = 0x30;
@@ -353,6 +366,33 @@ where
         (period, period * blanking_lines / lines)
     }
 
+    /// Clocks a CPU access to bank A, `offset` clocks of the bus from now,
+    /// waits for a burst of the RBV in progress (Developer Note, chapter 5).
+    /// The RBV reads the frame buffer in bursts spread evenly over the lines
+    /// of the picture, and none during the vertical blanking.
+    pub fn fetch_hold(&self, offset: Ticks, bus_frequency: Ticks) -> Ticks {
+        if self.monp.video_off() {
+            return 0;
+        }
+        let (period, blanking) = self.frame_timing();
+        let period = period * bus_frequency;
+        let blanking = blanking * bus_frequency;
+        let pos = (self.frame_clock + offset * C16M_FREQUENCY) % period;
+        if pos < blanking {
+            return 0;
+        }
+        let line = (period - blanking) / self.monitor.height() as Ticks;
+        let line_bytes = (self.monitor.width() << self.monp.depth().min(3)) as Ticks / 8;
+        let interval = line * FETCH_BYTES / line_bytes;
+        let into = (pos - blanking) % interval;
+        let fetch = FETCH_CLOCKS * C16M_FREQUENCY;
+        if into < fetch {
+            (fetch - into).div_ceil(C16M_FREQUENCY)
+        } else {
+            0
+        }
+    }
+
     /// Advances by a number of cycles of the bus. Returns true at the start
     /// of the vertical blanking.
     pub fn tick(&mut self, ticks: Ticks, bus_frequency: Ticks) -> bool {
@@ -524,6 +564,31 @@ mod tests {
         assert_eq!(rbv.read(REG_SLOT_IFR), 0x3F);
         rbv.tick(1, C16M_FREQUENCY);
         assert_eq!(rbv.read(REG_SLOT_IFR), 0x7F);
+    }
+
+    /// Share of the time the RBV keeps bank A, at each depth
+    #[test]
+    fn fetch_share() {
+        for (monitor, shares) in [
+            (MacMonitor::HiRes14, [64, 128, 256, 512]),
+            (MacMonitor::PortraitBW, [130, 261, 522, 0]),
+        ] {
+            let mut rbv = Rbv::new(NullRenderer::new(0, 0).unwrap(), monitor);
+            let (period, _) = rbv.frame_timing();
+            let bus_frequency = 25_000_000;
+            let clocks = period * bus_frequency / C16M_FREQUENCY;
+            for (depth, share) in shares.into_iter().enumerate() {
+                if share == 0 {
+                    continue;
+                }
+                rbv.write(REG_MONP, depth as Byte);
+                let busy = (0..clocks)
+                    .filter(|&t| rbv.fetch_hold(t, bus_frequency) > 0)
+                    .count() as Ticks;
+                // In thousandths
+                assert_eq!(busy * 1000 / clocks, share, "{monitor:?} depth {depth}");
+            }
+        }
     }
 
     #[test]
