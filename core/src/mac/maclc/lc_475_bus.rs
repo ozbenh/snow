@@ -13,7 +13,7 @@
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::bus::access::{Bus68040, BusAccess, BusResponse, bus_access_long};
+use crate::bus::access::{Beat, Bus68040, BusAccess, BusResponse, bus_access_long};
 use crate::bus::native_clock::{C16M_FREQUENCY, DeviceCycle, NativeClock};
 use crate::bus::{
     Address, Bus, BusMember, InspectRun, InspectableBus, IrqSource, inspect_read_bytes,
@@ -1092,7 +1092,7 @@ where
         let region = MAP[usize::from(self.overlay)][block];
         let memory = Self::memory_waits(region, acc.addr, acc.write);
         let waits = match memory {
-            Some((_, next)) if acc.burst && acc.addr & 0xF != 0 => next,
+            Some((_, next)) if acc.beat == Beat::BurstNext => next,
             Some((first, _)) if matches!(region, Region::Video) => {
                 first + self.vram_row_waits(acc.addr)
             }
@@ -1125,7 +1125,7 @@ where
             let rw = if acc.write { "write" } else { "read" };
             warn!("Bus error ({}) at unmapped address: {:08X}", rw, acc.addr);
         }
-        if acc.burst
+        if acc.beat != Beat::Single
             && memory.is_some()
             && let BusResponse::Ack { burst_reject, .. } = &mut resp
         {

@@ -1,6 +1,6 @@
 //! M68k CPU - Bus transactions: the bus cycles of a CPU access
 
-use crate::bus::access::{BusAccess, BusResponse, CpuBus};
+use crate::bus::access::{Beat, BusAccess, BusResponse, CpuBus};
 use crate::bus::{Address, Bus, IrqSource};
 use crate::cpu_m68k::bus::low_bytes;
 use crate::cpu_m68k::cpu::{CpuError, Group0Details, HistoryEntryInstruction};
@@ -9,17 +9,6 @@ use crate::tickable::Ticks;
 use crate::types::Long;
 
 use anyhow::{Result, bail};
-
-/// Place of a bus cycle in a line transfer
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Beat {
-    /// Not part of a burst
-    Single,
-    /// First long word of a line, asking for a burst
-    First,
-    /// Second to fourth long word of a burst the port took
-    Next,
-}
 
 /// The operand a bus cycle is for, as a bus error reports it
 #[derive(Clone, Copy)]
@@ -173,7 +162,7 @@ where
     ) -> Result<([Long; 4], u8)> {
         let first = (paddr >> 2) as usize % 4;
         let mut line = [0; 4];
-        let (data, width, burst) = self.run(fault, paddr, 4, None, Beat::First)?;
+        let (data, width, burst) = self.run(fault, paddr, 4, None, Beat::BurstFirst)?;
         if width < 4 {
             let (rest, _) = self.access_68020(fault, paddr.wrapping_add(width), 4 - width, None)?;
             line[first] = (data << (8 * (4 - width))) | rest;
@@ -187,7 +176,7 @@ where
         for i in 1..4 {
             let entry = (first + i) % 4;
             let addr = base.wrapping_add(4 * entry as Address);
-            let (data, _, _) = self.run(fault, addr, 4, None, Beat::Next)?;
+            let (data, _, _) = self.run(fault, addr, 4, None, Beat::BurstNext)?;
             line[entry] = data;
         }
         Ok((line, 0xF))
@@ -244,7 +233,7 @@ where
         wline: Option<&[Long; 4]>,
     ) -> Result<[Long; 4]> {
         let mut line = [0; 4];
-        let mut beat = Beat::First;
+        let mut beat = Beat::BurstFirst;
         for (i, long) in line.iter_mut().enumerate() {
             let addr = paddr.wrapping_add(4 * i as Address);
             // This long word of the line, for a write
@@ -253,7 +242,7 @@ where
             debug_assert_eq!(width, 4, "68040 bus answered a {width}-byte port");
             *long = data;
             beat = if burst && beat != Beat::Single {
-                Beat::Next
+                Beat::BurstNext
             } else {
                 Beat::Single
             };
@@ -285,7 +274,7 @@ where
                 Some(data) => BusAccess::write(paddr, size, data, pending),
                 None => BusAccess::read(paddr, size, pending),
             };
-            acc.burst = beat != Beat::Single;
+            acc.beat = beat;
             match self.bus.access(acc)? {
                 BusResponse::Ack {
                     width,
@@ -323,7 +312,7 @@ where
         if waits > 0 {
             self.history.waitstates = true;
         }
-        let ticks = if beat == Beat::Next {
+        let ticks = if beat == Beat::BurstNext {
             1
         } else {
             <TBus::Cpu as CpuBus>::CYCLE

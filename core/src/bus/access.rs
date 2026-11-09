@@ -57,6 +57,17 @@ impl CpuBus for Bus68040 {
     const CYCLE: Ticks = 2;
 }
 
+/// Place of a bus cycle in a line transfer
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Beat {
+    /// Not part of a burst
+    Single,
+    /// First long word of a line, asking for a burst
+    BurstFirst,
+    /// Second to fourth long word of a burst the port took
+    BurstNext,
+}
+
 /// One bus cycle as presented by the CPU, on the data bus `C` of the CPU
 #[derive(Clone, Copy, Debug)]
 pub struct BusAccess<C> {
@@ -71,9 +82,9 @@ pub struct BusAccess<C> {
     // pub fc: u8,
     /// CPU cycles elapsed since the bus was last ticked
     pub pending: Ticks,
-    /// One long word of a line transfer, which the CPU would like to run as
-    /// a burst
-    pub burst: bool,
+    /// Place of the cycle in a line transfer, which the CPU would like to
+    /// run as a burst
+    pub beat: Beat,
     /// Label with CPU type for compile time checking
     _cpu: PhantomData<C>,
 }
@@ -92,7 +103,7 @@ impl<C: CpuBus> BusAccess<C> {
             write: false,
             // fc,
             pending,
-            burst: false,
+            beat: Beat::Single,
             _cpu: PhantomData,
         }
     }
@@ -111,7 +122,7 @@ impl<C: CpuBus> BusAccess<C> {
             write: true,
             // fc,
             pending,
-            burst: false,
+            beat: Beat::Single,
             _cpu: PhantomData,
         }
     }
