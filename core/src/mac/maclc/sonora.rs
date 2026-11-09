@@ -24,6 +24,11 @@ pub(super) const PSEUDOVIA_MASK: Address = 0x1F;
 pub(super) const RAM_READ_WAITS: Ticks = 3;
 /// Wait states of a RAM write bus cycle
 pub(super) const RAM_WRITE_WAITS: Ticks = 0;
+/// Wait states of each cycle of a burst after the first. The LC III
+/// Developer Note says that the RAM takes burst reads, but not how fast:
+/// three clocks a long word fits the line fills of a real LC III, measured
+/// with BusTiming.
+pub(super) const RAM_BURST_WAITS: Ticks = 2;
 /// Wait states of a ROM bus cycle
 pub(super) const ROM_WAITS: Ticks = 3;
 /// Wait states of a video RAM read bus cycle, measured with BusTiming on a

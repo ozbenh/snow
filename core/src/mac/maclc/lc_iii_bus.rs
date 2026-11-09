@@ -9,7 +9,7 @@ use super::sonora;
 use super::via::Via;
 use super::video::{self, Video};
 use crate::bus::access::{
-    Bus68020, BusAccess, BusResponse, bus_access_byte, bus_access_long, bus_access_word,
+    Beat, Bus68020, BusAccess, BusResponse, bus_access_byte, bus_access_long, bus_access_word,
 };
 use crate::bus::native_clock::{C16M_FREQUENCY, DeviceCycle, NativeClock};
 use crate::bus::{
@@ -753,12 +753,25 @@ where
                 let port = self.port(&Region::Rom, false);
                 self.cycle(acc, port, Self::rom_read, Self::ignore_write)
             }
-            Some(region @ Region::Ram(addr)) => self.cycle(
-                acc,
-                self.port(&region, acc.write),
-                move |s, _, len| s.ram_read(addr, len),
-                move |s, _, len, val| s.ram_write(addr, len, val),
-            ),
+            Some(region @ Region::Ram(addr)) => {
+                let (width, mut waits) = self.port(&region, acc.write);
+                if acc.beat == Beat::BurstNext {
+                    waits = sonora::RAM_BURST_WAITS;
+                }
+                let mut resp = self.cycle(
+                    acc,
+                    (width, waits),
+                    move |s, _, len| s.ram_read(addr, len),
+                    move |s, _, len, val| s.ram_write(addr, len, val),
+                );
+                // The RAM takes bursts
+                if acc.beat != Beat::Single
+                    && let BusResponse::Ack { burst_reject, .. } = &mut resp
+                {
+                    *burst_reject = false;
+                }
+                resp
+            }
             Some(region @ Region::Rom) => self.cycle(
                 acc,
                 self.port(&region, acc.write),
