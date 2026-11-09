@@ -10,7 +10,7 @@ use crate::cpu_m68k::pmmu::translate::{
     CacheMode, LAST_TRANSLATION_FETCH, LAST_TRANSLATION_READ, LAST_TRANSLATION_WRITE, Translation,
 };
 use crate::cpu_m68k::{
-    CpuM68kType, CpuSized, M68000, M68020, M68040, TORDER_HIGHLOW, TORDER_LOWHIGH,
+    CpuM68kType, CpuSized, M68000, M68020, M68030, M68040, TORDER_HIGHLOW, TORDER_LOWHIGH,
 };
 use crate::tickable::Ticks;
 use crate::types::Word;
@@ -484,7 +484,7 @@ where
         if CPU_TYPE >= M68040 {
             return self.phys_read_hit(kind, fc, laddr, size);
         }
-        self.caches.read_hit(
+        let res = self.caches.read_hit(
             self.regs.cacr,
             kind,
             fc,
@@ -492,7 +492,16 @@ where
             size,
             ticks,
             &mut self.history_current,
-        )
+        )?;
+        if CPU_TYPE == M68030 && self.burst_line == Some((kind == AccessKind::Fetch, laddr & !0xF))
+        {
+            // The rest of the line can only be used once the burst is over
+            // (MC68030UM 6.1.3.2): wait for it
+            self.bus_credit = 0;
+            self.burst_tail = 0;
+            self.burst_line = None;
+        }
+        Some(res)
     }
 
     /// read_hit() for physically tagged caches: with the last translation
@@ -532,14 +541,19 @@ where
     /// cpu_access() past the caches' read hits
     #[inline(always)]
     fn cpu_access_translated(&mut self, acc: &CpuAccess, ticks: &mut Ticks) -> Result<(Long, u32)> {
-        // The bus controller finishes the last write first
+        // The bus controller finishes the last write or burst first
         self.bus_credit = 0;
+        self.burst_tail = 0;
+        self.burst_line = None;
         let tr = self.translate(acc)?;
         let paddr = tr.paddr;
         let cacr = self.regs.cacr;
         let (data, len) = self
             .caches
             .access(&mut bus_transaction!(self, ticks), cacr, acc, &tr)?;
+        if CPU_TYPE == M68030 && self.burst_tail > 0 {
+            self.burst_line = Some((acc.kind == AccessKind::Fetch, acc.laddr & !0xF));
+        }
 
         if self.watch_active && acc.wdata.is_some() {
             self.watch_write(paddr, len);
@@ -685,6 +699,7 @@ where
                 }
             };
             self.advance_cycles(ticks)?;
+            self.take_burst_tail();
             return Ok(data);
         }
 
@@ -709,7 +724,17 @@ where
             done += n;
         }
         self.advance_cycles(ticks)?;
+        self.take_burst_tail();
         Ok(result as Long)
+    }
+
+    /// Once the read that ran a 68030 burst is paid for, the rest of the
+    /// burst becomes credit that what follows can overlap
+    #[inline(always)]
+    fn take_burst_tail(&mut self) {
+        if CPU_TYPE == M68030 && self.burst_tail > 0 {
+            self.bus_credit = std::mem::take(&mut self.burst_tail);
+        }
     }
 
     /// Reads a data operand of `len` bytes (1-4) and spends ticks (68020+).

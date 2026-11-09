@@ -444,8 +444,17 @@ where
 
     /// Clocks of the last bus cycles that the following internal clocks can
     /// overlap (68020+): the sequencer goes on while the bus controller
-    /// finishes a write (MC68020UM 8.1.4, MC68030UM 11.1)
+    /// finishes a write (MC68020UM 8.1.4, MC68030UM 11.1), or the rest of a
+    /// 68030 burst (MC68030UM 6.1.3.2)
     pub(in crate::cpu_m68k) bus_credit: Ticks,
+
+    /// Clocks of the rest of the 68030 burst that the access in progress
+    /// ran, which become bus_credit once the access is paid for
+    pub(in crate::cpu_m68k) burst_tail: Ticks,
+
+    /// The line the last 68030 burst filled, while its rest may still be
+    /// running: whether in the instruction cache, and its logical address
+    pub(in crate::cpu_m68k) burst_line: Option<(bool, Address)>,
 
     /// Time at which the FPU finishes the arithmetic operation it runs on its own
     pub(in crate::cpu_m68k) fpu_free_at: Ticks,
@@ -633,6 +642,8 @@ where
             regs: RegisterFile::new(),
             cycles: 0,
             bus_credit: 0,
+            burst_tail: 0,
+            burst_line: None,
             fpu_free_at: 0,
             fpu_busy_regs: 0,
             exec040: Exec040::DEFAULT,
@@ -706,6 +717,8 @@ where
         self.cycles = 0;
         self.last_bus_sync = 0;
         self.bus_credit = 0;
+        self.burst_tail = 0;
+        self.burst_line = None;
         self.fpu_free_at = 0;
         self.fpu_busy_regs = 0;
         self.exec040_prev = 0;
@@ -1234,7 +1247,8 @@ where
         }
     }
 
-    /// Advances by the given amount of cycles, less what overlaps the last write
+    /// Advances by the given amount of cycles, less what overlaps the last
+    /// write or burst
     pub(in crate::cpu_m68k) fn advance_cycles(&mut self, ticks: Ticks) -> Result<()> {
         let overlap = ticks.min(self.bus_credit);
         self.bus_credit -= overlap;

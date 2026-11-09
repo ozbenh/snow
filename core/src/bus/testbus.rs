@@ -3,7 +3,7 @@ use num_traits::{PrimInt, WrappingAdd};
 
 use super::access::CpuBus;
 use super::{Address, Bus, InspectRun, InspectableBus, IrqSource};
-use crate::bus::access::{BusAccess, BusResponse};
+use crate::bus::access::{Beat, BusAccess, BusResponse};
 use crate::tickable::{Tickable, Ticks};
 
 use std::cell::RefCell;
@@ -60,6 +60,9 @@ pub struct Testbus<TA: PrimInt + WrappingAdd + Hash + Debug, TD: PrimInt, C> {
     pub test_device: Option<TestDevice>,
     /// What InspectableBus::inspect_generation() returns
     pub inspect_generation: u32,
+    /// Takes bursts on reads of 32-bit ports when set, with these wait
+    /// states on the cycles after the first
+    pub burst_waits: Option<Ticks>,
 }
 
 impl<TA, TD, C> Testbus<TA, TD, C>
@@ -82,6 +85,7 @@ where
             fault_ranges: vec![],
             test_device: None,
             inspect_generation: 0,
+            burst_waits: None,
         }
     }
 
@@ -200,7 +204,23 @@ where
                 data = (data << 8) | val.to_u32().unwrap();
             }
         }
-        Ok(BusResponse::ack(width, data, 0))
+        let mut resp = BusResponse::ack(width, data, 0);
+        if let Some(next_waits) = self.burst_waits
+            && !acc.write
+            && width == 4
+            && acc.beat != Beat::Single
+            && let BusResponse::Ack {
+                waits,
+                burst_reject,
+                ..
+            } = &mut resp
+        {
+            *burst_reject = false;
+            if acc.beat == Beat::BurstNext {
+                *waits = next_waits;
+            }
+        }
+        Ok(resp)
     }
 
     fn reset(&mut self, _hard: bool) -> Result<bool> {

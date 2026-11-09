@@ -34,6 +34,9 @@ pub struct BusTransaction<'a, TBus, const CPU_TYPE: CpuM68kType> {
     pub history: &'a mut HistoryEntryInstruction,
     /// Duration of the operand access so far, not yet spent
     pub ticks: &'a mut Ticks,
+    /// Duration of the rest of the last 68030 burst of the access, which
+    /// the CPU can overlap with what follows
+    pub burst_tail: &'a mut Ticks,
 }
 
 /// Borrows a `BusTransaction` from a `CpuM68k`, adding the duration of its bus
@@ -46,6 +49,7 @@ macro_rules! bus_transaction {
             last_bus_sync: &mut $cpu.last_bus_sync,
             history: &mut $cpu.history_current,
             ticks: $ticks,
+            burst_tail: &mut $cpu.burst_tail,
         }
     };
 }
@@ -155,6 +159,11 @@ where
     ///
     /// A port narrower than 32 bits can't burst: the long word is completed
     /// with the usual dynamic bus sizing cycles, and that's all.
+    ///
+    /// The long word the CPU asked for is available as soon as the first
+    /// cycle ends, the others only once the burst is over (MC68030UM
+    /// 6.1.3.2): the time of the burst cycles goes to `burst_tail`, which
+    /// the CPU overlaps with what follows.
     pub fn line_fill_68030(
         &mut self,
         fault: &FaultInfo,
@@ -173,12 +182,14 @@ where
             return Ok((line, 1 << first));
         }
         let base = paddr & !0xF;
+        let start = *self.ticks;
         for i in 1..4 {
             let entry = (first + i) % 4;
             let addr = base.wrapping_add(4 * entry as Address);
             let (data, _, _) = self.run(fault, addr, 4, None, Beat::BurstNext)?;
             line[entry] = data;
         }
+        *self.burst_tail = *self.ticks - start;
         Ok((line, 0xF))
     }
 
