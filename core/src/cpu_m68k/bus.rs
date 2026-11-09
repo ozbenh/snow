@@ -525,7 +525,7 @@ where
             size,
             &mut self.history_current,
         )?;
-        self.write_credit = 0;
+        self.bus_credit = 0;
         Some(res)
     }
 
@@ -533,7 +533,7 @@ where
     #[inline(always)]
     fn cpu_access_translated(&mut self, acc: &CpuAccess, ticks: &mut Ticks) -> Result<(Long, u32)> {
         // The bus controller finishes the last write first
-        self.write_credit = 0;
+        self.bus_credit = 0;
         let tr = self.translate(acc)?;
         let paddr = tr.paddr;
         let cacr = self.regs.cacr;
@@ -585,7 +585,7 @@ where
         let paddr = tr.paddr;
         let cacr = self.regs.cacr;
         // The bus controller finishes the last write first
-        self.write_credit = 0;
+        self.bus_credit = 0;
         let mut ticks = 0;
         let line = self.caches.line_access(
             &mut bus_transaction!(self, &mut ticks),
@@ -842,7 +842,7 @@ where
         {
             return false;
         }
-        self.write_credit = 0;
+        self.bus_credit = 0;
         true
     }
 
@@ -876,7 +876,7 @@ where
             }
         }
         self.advance_cycles(ticks)?;
-        self.write_credit = ticks;
+        self.bus_credit = ticks;
         Ok(())
     }
 

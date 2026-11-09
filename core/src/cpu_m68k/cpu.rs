@@ -442,10 +442,10 @@ where
     /// Total cycle counter
     pub cycles: Ticks,
 
-    /// Clocks of the last write that the following internal clocks can
+    /// Clocks of the last bus cycles that the following internal clocks can
     /// overlap (68020+): the sequencer goes on while the bus controller
-    /// finishes the write (MC68020UM 8.1.4, MC68030UM 11.1)
-    pub(in crate::cpu_m68k) write_credit: Ticks,
+    /// finishes a write (MC68020UM 8.1.4, MC68030UM 11.1)
+    pub(in crate::cpu_m68k) bus_credit: Ticks,
 
     /// Time at which the FPU finishes the arithmetic operation it runs on its own
     pub(in crate::cpu_m68k) fpu_free_at: Ticks,
@@ -632,7 +632,7 @@ where
             pmmu: CPU_TYPE >= M68030,
             regs: RegisterFile::new(),
             cycles: 0,
-            write_credit: 0,
+            bus_credit: 0,
             fpu_free_at: 0,
             fpu_busy_regs: 0,
             exec040: Exec040::DEFAULT,
@@ -705,7 +705,7 @@ where
 
         self.cycles = 0;
         self.last_bus_sync = 0;
-        self.write_credit = 0;
+        self.bus_credit = 0;
         self.fpu_free_at = 0;
         self.fpu_busy_regs = 0;
         self.exec040_prev = 0;
@@ -828,7 +828,7 @@ where
             assert_eq!(self.holding_addr, fetch_addr);
             self.holding_valid = false;
             if CPU_TYPE >= M68040 {
-                self.write_credit = 0;
+                self.bus_credit = 0;
             } else {
                 self.advance_cycles(FETCH_HIT_TICKS)?;
             }
@@ -1037,7 +1037,7 @@ where
         if instr.data & 0xF000 == 0xF000 {
             // A coprocessor instruction starts with a bus cycle to the
             // coprocessor, which its idle clocks stand for
-            self.write_credit = 0;
+            self.bus_credit = 0;
         }
         let mut irq_taken = false;
         let execute_result = if self.fpu_type != FPU_NONE
@@ -1236,8 +1236,8 @@ where
 
     /// Advances by the given amount of cycles, less what overlaps the last write
     pub(in crate::cpu_m68k) fn advance_cycles(&mut self, ticks: Ticks) -> Result<()> {
-        let overlap = ticks.min(self.write_credit);
-        self.write_credit -= overlap;
+        let overlap = ticks.min(self.bus_credit);
+        self.bus_credit -= overlap;
         let ticks = ticks - overlap;
         self.cycles += ticks;
         self.bus.cpu_tick(ticks)?;
@@ -4551,7 +4551,7 @@ where
         // Dropping dirty data changes what memory looks like
         self.watch_hit |= self.watch_active;
         // The bus controller finishes the last write first
-        self.write_credit = 0;
+        self.bus_credit = 0;
         self.caches.invalidate(
             &mut bus_transaction!(self, &mut ticks),
             caches,
