@@ -100,6 +100,12 @@ impl Egret {
         self.common.security_jumper = installed;
     }
 
+    /// Sets whether the machine has soft power, which the Egret switches,
+    /// rather than a power switch
+    pub fn set_soft_power(&mut self, soft_power: bool) {
+        self.common.soft_power = soft_power;
+    }
+
     pub fn adb_event(&mut self, event: &AdbEvent) {
         self.common.adb_event(event);
     }

@@ -166,6 +166,10 @@ pub struct EgretCommon {
     /// with the Control Panel Enable command, `$10`).
     pub(crate) security_jumper: bool,
 
+    /// The machine has soft power, which the Egret switches, rather than a
+    /// power switch (the Macintosh IIsi)
+    pub(crate) soft_power: bool,
+
     /// Clock and the first 256 bytes of PRAM. Only the storage is used.
     pub(crate) rtc: Rtc,
 
@@ -218,6 +222,7 @@ impl EgretCommon {
             autopoll_period: Self::autopoll_rate_ticks(AUTOPOLL_MS),
             reset_requested: false,
             security_jumper: false,
+            soft_power: false,
             cuda_ram: if kind == McuKind::Cuda {
                 let mut ram = vec![0; CUDA_RAM_SIZE];
                 ram[usize::from(CUDA_FLAGS - CUDA_RAM)] = CUDA_FLAGS_RESET;
@@ -720,9 +725,16 @@ impl EgretCommon {
             },
 
             // Turn the power off, which only machines with soft power do
-            CMD_POWER_DOWN => Self::params(params).map(|[]| vec![]),
+            CMD_POWER_DOWN => Self::params(params).map(|[]| {
+                if self.soft_power {
+                    info!("Power off requested (not modelled)");
+                }
+                vec![]
+            }),
 
-            // Set when machines with soft power turn on, rejected with a power switch
+            // Set when machines with soft power turn on (stored by the
+            // firmware, not modelled), rejected with a power switch
+            CMD_SET_POWER_UP_TIME if self.soft_power => Self::params::<4>(params).map(|_| vec![]),
             CMD_SET_POWER_UP_TIME => Self::params::<4>(params).and(Err(ERROR_COMMAND)),
 
             // Choose whether some event resets the CPU (unknown, not modelled)
@@ -751,7 +763,9 @@ impl EgretCommon {
             // Drive the VPP pin of the microcontroller (not modelled)
             CMD_VPP => Self::params(params).map(|[_]| vec![]),
 
-            // Turn on when AC power comes back, rejected with a power switch
+            // Turn on when AC power comes back (stored by the firmware, not
+            // modelled), rejected with a power switch
+            CMD_FILE_SERVER if self.soft_power => Self::params(params).map(|[_]| vec![]),
             CMD_FILE_SERVER => Self::params::<1>(params).and(Err(ERROR_COMMAND)),
 
             // Set or get the autopoll rate (fixed in the model, not stored)
@@ -1103,6 +1117,21 @@ mod tests {
             [0x02, 0x02, 0x01, 0x0B]
         );
         assert_eq!(egret.command(&[0x01, 0x13, 0x01]), [0x02, 0x02, 0x01, 0x13]);
+        assert_eq!(egret.command(&[0x01, 0x13]), [0x02, 0x03, 0x01, 0x13]);
+    }
+
+    #[test]
+    fn soft_power_commands() {
+        let mut egret = EgretCommon {
+            soft_power: true,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            egret.command(&[0x01, 0x0B, 0x00, 0x00, 0x00, 0x00]),
+            [0x01, 0x00, 0x0B]
+        );
+        assert_eq!(egret.command(&[0x01, 0x13, 0x01]), [0x01, 0x00, 0x13]);
         assert_eq!(egret.command(&[0x01, 0x13]), [0x02, 0x03, 0x01, 0x13]);
     }
 
