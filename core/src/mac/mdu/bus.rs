@@ -9,8 +9,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::rbv::{self, Rbv};
-use crate::bus::access::{Bus68020, BusAccess, BusResponse, bus_access_byte, bus_access_long};
-use crate::bus::native_clock::{C16M_FREQUENCY, C16M_PER_VIA, DeviceCycle, NativeClock, WaitTicks};
+use crate::bus::access::{
+    Beat, Bus68020, BusAccess, BusResponse, CpuBus, bus_access_byte, bus_access_long,
+};
+use crate::bus::native_clock::{C16M_FREQUENCY, DeviceCycle, NativeClock, WaitTicks};
 use crate::bus::{
     Address, Bus, BusMember, InspectRun, InspectableBus, IrqSource, inspect_read_bytes,
 };
@@ -48,11 +50,21 @@ const READ_WAITS: Ticks = 2;
 /// Wait states of a RAM write, which takes four clocks
 const RAM_WRITE_WAITS: Ticks = 1;
 
+/// Wait states of each cycle of a burst after the first: the RAM bursts in
+/// five, two, two and two clocks (Developer Note, chapter 3). The ROM
+/// doesn't burst (Macintosh IIsi Developer Note, chapter 3).
+const BURST_WAITS: Ticks = 1;
+
 /// Wait states of a NuBus transaction, approximate
 const NUBUS_WAITS: Ticks = 4;
 
-/// Time the SCC needs between accesses (2.2 us), in cycles of the bus
-const SCC_RECOVERY: Ticks = BUS_FREQUENCY * 22 / 10_000_000;
+/// C16M ticks into a VIA cycle at which the MDU releases the CPU, fitted to
+/// BusTiming on a real IIci
+const VIA_RELEASE: Ticks = 8;
+
+/// Native ticks from the start of an SCC cycle to the start of the next one,
+/// fitted likewise
+const SCC_INTERVAL: Ticks = 13;
 
 /// VIA clock cycles of a period of the 60.15 Hz tick the RBV sends to VIA 1
 const TICK60_PERIOD: Ticks = 13024;
@@ -148,6 +160,8 @@ pub struct MduBus<TRenderer: Renderer> {
     pub(crate) asc: Asc,
     /// Native time the SCC can be accessed again
     scc_ready: Ticks,
+    /// Native time the RAM can start a cycle again, after a write
+    ram_ready: Ticks,
     asc_clock: Ticks,
     mouse_ready: bool,
     pub(crate) swim: Swim,
@@ -227,6 +241,7 @@ where
             via1: Via::new(model),
             rbv: Rbv::new(renderer, monitor),
             scc_ready: 0,
+            ram_ready: 0,
             scc: Scc::new(RTXC_FREQUENCY),
             swim: Swim::new(model.fdd_drives(), model.fdd_hd(), C16M_FREQUENCY),
             scsi: ScsiController::new(),
@@ -462,11 +477,58 @@ where
         Self::dev_write(addr, val as Byte, self.swim.write(addr, val as Byte))
     }
 
+    /// Wait states of a RAM cycle. A cycle right after a write takes a clock
+    /// more: a write delayed by the previous one takes five clocks
+    /// (Macintosh IIci Developer Note, appendix A), a read six (Macintosh
+    /// IIsi Developer Note, figure 6-9). When overclocking, only the wait
+    /// states of the cycle itself are modelled.
+    fn ram_waits(&mut self, acc: &BusAccess<Bus68020>) -> Ticks {
+        let waits = if acc.write {
+            RAM_WRITE_WAITS
+        } else if acc.beat == Beat::BurstNext {
+            BURST_WAITS
+        } else {
+            READ_WAITS
+        };
+        if self.native_clock.is_overclocking() {
+            return waits;
+        }
+        let now = self.native_clock.native_ticks() + acc.pending;
+        let hold = self.ram_ready.saturating_sub(now);
+        if acc.write {
+            self.ram_ready = now + hold + Bus68020::CYCLE + waits + 1;
+        }
+        waits + hold
+    }
+
+    /// Wait states of an I/O device, fitted to BusTiming on a real IIci.
+    /// The SWIM wasn't measured: it has the wait state of the Mac II
+    /// family's GLUE, as does the SCSI pseudo-DMA. The Bt478 is taken to be
+    /// as fast as the RBV.
+    fn io_waits(device: Address, write: bool) -> Ticks {
+        match device {
+            // SCC
+            2 => 4,
+            // SCSI
+            8 if write => 3,
+            8 => 2,
+            // SCSI pseudo-DMA
+            3 | 9 => 0,
+            // ASC
+            10 if write => 6,
+            10 => 5,
+            // SWIM
+            11 => 1,
+            // Bt478, RBV
+            18 | 19 => 2,
+            _ => 0,
+        }
+    }
+
     /// The I/O devices are 8-bit ports on D31-D24 (IIci schematic), every
     /// 8 KB of the block, which repeats every 256 KB. Their cycles take
     /// native time: the VIA is synchronous with the VIA clock, the other
-    /// devices start on a native tick, with the wait states of the Mac II
-    /// family's GLUE for now.
+    /// devices start on a native tick.
     ///
     /// Nothing else answers in the block. What the MDU does there is not
     /// known: it reads as open bus here, without a bus error, as the ROM
@@ -481,53 +543,60 @@ where
             DeviceCycle::Stall(n) => return BusResponse::Stall(n),
             DeviceCycle::Access(w) => w,
         };
+        let waits = Self::io_waits(device, acc.write);
         match device {
-            2 => self.scc_cycle(acc, w),
+            2 => self.scc_cycle(acc, w, waits),
             // SCSI pseudo-DMA only takes the lower 4KB of its slot
             3 if acc.addr & 0x1000 == 0 => {
+                let w = self.native_clock.scale_dev_waits(w, waits);
                 bus_access_byte(acc, w, self, Self::scsi_dma_read, Self::scsi_dma_write)
             }
             8 => {
-                let w = self.native_clock.scale_dev_waits(w, 1);
+                let w = self.native_clock.scale_dev_waits(w, waits);
                 bus_access_byte(acc, w, self, Self::scsi_read, Self::scsi_write)
             }
-            9 => bus_access_byte(acc, w, self, Self::scsi_dma_read, Self::scsi_dma_write),
+            9 => {
+                let w = self.native_clock.scale_dev_waits(w, waits);
+                bus_access_byte(acc, w, self, Self::scsi_dma_read, Self::scsi_dma_write)
+            }
             10 => {
-                let w = self
-                    .native_clock
-                    .scale_dev_waits(w, if acc.write { 1 } else { 2 });
+                let w = self.native_clock.scale_dev_waits(w, waits);
                 bus_access_byte(acc, w, self, Self::asc_read, Self::asc_write)
             }
             11 => {
                 let hold = self.swim.hold(&self.native_clock);
-                let w = self.native_clock.scale_dev_waits(w, 1 + hold);
+                let w = self.native_clock.scale_dev_waits(w, waits + hold);
                 bus_access_byte(acc, w, self, Self::swim_read, Self::swim_write)
             }
-            // Bt478
-            18 => bus_access_byte(acc, w, self, Self::dac_read, Self::dac_write),
-            19 => bus_access_byte(acc, w, self, Self::rbv_read, Self::rbv_write),
+            18 => {
+                let w = self.native_clock.scale_dev_waits(w, waits);
+                bus_access_byte(acc, w, self, Self::dac_read, Self::dac_write)
+            }
+            19 => {
+                let w = self.native_clock.scale_dev_waits(w, waits);
+                bus_access_byte(acc, w, self, Self::rbv_read, Self::rbv_write)
+            }
             _ => bus_access_byte(acc, w, self, Self::open_read, Self::ignore_write),
         }
     }
 
-    /// Accesses to the SCC are held off until it has had the time it needs
-    /// since the previous one
-    fn scc_cycle(&mut self, acc: BusAccess<Bus68020>, w: WaitTicks) -> BusResponse {
+    /// The MDU holds an SCC cycle off until some time has passed since the
+    /// start of the previous one (BusTiming on a real IIci)
+    fn scc_cycle(&mut self, acc: BusAccess<Bus68020>, w: WaitTicks, waits: Ticks) -> BusResponse {
         // When overclocking, acc.pending is 0 after device_sync(), and native
         // ticks are CPU ticks otherwise
         let now = self.native_clock.native_ticks() + acc.pending;
         let hold = self.scc_ready.saturating_sub(now);
-        // The access itself takes 3 clocks
-        self.scc_ready = now + hold + 3 + SCC_RECOVERY;
-        let w = self.native_clock.scale_dev_waits(w, hold);
+        self.scc_ready = now + hold + SCC_INTERVAL;
+        let w = self.native_clock.scale_dev_waits(w, waits + hold);
         bus_access_byte(acc, w, self, Self::scc_read, Self::scc_write)
     }
 
     /// VIA accesses are synchronous with the VIA clock: one starts on a VIA
-    /// tick, and the CPU is released half way through the VIA cycle (as seen
-    /// with BusTiming on a real IIci)
+    /// tick and lasts a VIA clock cycle, and the CPU is released VIA_RELEASE
+    /// into it
     fn via_cycle(&mut self, acc: BusAccess<Bus68020>) -> BusResponse {
-        match self.native_clock.via_sync(&acc, C16M_PER_VIA / 2) {
+        match self.native_clock.via_sync(&acc, VIA_RELEASE) {
             DeviceCycle::Stall(n) => BusResponse::Stall(n),
             DeviceCycle::Access(w) => {
                 bus_access_byte(acc, w, self, Self::via1_read, Self::via1_write)
@@ -673,12 +742,15 @@ where
             // Everything but RAM and ROM sees the devices up to date, as they are ticked
             Region::SuperSlot if acc.pending > 0 => BusResponse::Stall(0),
             Region::Ram => {
-                let waits = if acc.write {
-                    RAM_WRITE_WAITS
-                } else {
-                    READ_WAITS
-                };
-                bus_access_long(acc, waits, self, Self::ram_read, Self::ram_write)
+                let waits = self.ram_waits(&acc);
+                let mut resp = bus_access_long(acc, waits, self, Self::ram_read, Self::ram_write);
+                // The RAM takes bursts
+                if acc.beat != Beat::Single
+                    && let BusResponse::Ack { burst_reject, .. } = &mut resp
+                {
+                    *burst_reject = false;
+                }
+                resp
             }
             Region::Rom => {
                 bus_access_long(acc, READ_WAITS, self, Self::rom_read, Self::ignore_write)
