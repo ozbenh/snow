@@ -35,6 +35,7 @@ use crate::mac::maclc::lc_i_bus::LcIBus;
 use crate::mac::maclc::lc_iii_bus::LcIIIBus;
 use crate::mac::maclc::pds_iie::IieCardSettings;
 use crate::mac::maclc::pds_iie::disk::DskOrder;
+use crate::mac::mdu::bus::MduBus;
 use crate::mac::portable::bus::MacPortableBus;
 use crate::mac::quadra::bus::Quadra700Bus;
 use crate::mac::scc::Scc;
@@ -128,6 +129,7 @@ macro_rules! dispatch {
                         Self::MacLC(inner) => &machine_target!(inner, lc_i, $($ref_target)*),
                         Self::MacLCII(inner) => &machine_target!(inner, lc_i, $($ref_target)*),
                         Self::MacLCIII(inner) => &machine_target!(inner, lc_iii, $($ref_target)*),
+                        Self::Mdu(inner) => &machine_target!(inner, mdu, $($ref_target)*),
                         Self::Quadra700(inner) => &machine_target!(inner, quadra700, $($ref_target)*),
                         Self::LC475(inner) => &machine_target!(inner, lc475, $($ref_target)*),
                     }
@@ -145,6 +147,7 @@ macro_rules! dispatch {
                         Self::MacLC(inner) => &mut machine_target!(inner, lc_i_mut, $($mut_ref_target)*),
                         Self::MacLCII(inner) => &mut machine_target!(inner, lc_i_mut, $($mut_ref_target)*),
                         Self::MacLCIII(inner) => &mut machine_target!(inner, lc_iii_mut, $($mut_ref_target)*),
+                        Self::Mdu(inner) => &mut machine_target!(inner, mdu_mut, $($mut_ref_target)*),
                         Self::Quadra700(inner) => &mut machine_target!(inner, quadra700_mut, $($mut_ref_target)*),
                         Self::LC475(inner) => &mut machine_target!(inner, lc475_mut, $($mut_ref_target)*),
                     }
@@ -162,6 +165,7 @@ macro_rules! dispatch {
                         Self::MacLC(inner) => machine_target!(inner, lc_i, $($immut_call_target)*),
                         Self::MacLCII(inner) => machine_target!(inner, lc_i, $($immut_call_target)*),
                         Self::MacLCIII(inner) => machine_target!(inner, lc_iii, $($immut_call_target)*),
+                        Self::Mdu(inner) => machine_target!(inner, mdu, $($immut_call_target)*),
                         Self::Quadra700(inner) => machine_target!(inner, quadra700, $($immut_call_target)*),
                         Self::LC475(inner) => machine_target!(inner, lc475, $($immut_call_target)*),
                     }
@@ -179,6 +183,7 @@ macro_rules! dispatch {
                         Self::MacLC(inner) => machine_target!(inner, lc_i_mut, $($mut_call_target)*),
                         Self::MacLCII(inner) => machine_target!(inner, lc_i_mut, $($mut_call_target)*),
                         Self::MacLCIII(inner) => machine_target!(inner, lc_iii_mut, $($mut_call_target)*),
+                        Self::Mdu(inner) => machine_target!(inner, mdu_mut, $($mut_call_target)*),
                         Self::Quadra700(inner) => machine_target!(inner, quadra700_mut, $($mut_call_target)*),
                         Self::LC475(inner) => machine_target!(inner, lc475_mut, $($mut_call_target)*),
                     }
@@ -300,6 +305,8 @@ enum EmulatorConfig {
     Quadra700(Box<CpuM68040<MachineBus040>>),
     /// Macintosh LC 475: a 68LC040, or a 68040 in its socket
     LC475(Box<CpuM68040<MachineBus040>>),
+    /// Macintosh IIci, around the MDU and the RBV
+    Mdu(Box<CpuM68030<MachineBus020>>),
 }
 
 dispatch! {
@@ -619,6 +626,29 @@ impl Emulator {
                 assert_eq!(cpu.get_type(), model.cpu_type());
 
                 EmulatorConfig::MacII30(cpu)
+            }
+            MacModel::MacIIci => {
+                assert!(override_fdd_type.is_none());
+
+                // Find extension ROM if present
+                let extension_rom = extra_roms.iter().find_map(|p| match p {
+                    ExtraROMs::ExtensionROM(data) => Some(*data),
+                    _ => None,
+                });
+
+                let bus = MduBus::new(
+                    model,
+                    rom,
+                    extension_rom,
+                    renderer,
+                    monitor.unwrap_or_default(),
+                    mouse_mode,
+                    ram_size,
+                );
+                let cpu = Box::new(CpuM68030::new(MachineBus020::Mdu(bus), FPU_M68882));
+                assert_eq!(cpu.get_type(), model.cpu_type());
+
+                EmulatorConfig::Mdu(cpu)
             }
             MacModel::LC => {
                 assert!(!pmmu_enabled, "PMMU not available on Macintosh LC");

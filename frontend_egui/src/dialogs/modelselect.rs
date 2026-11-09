@@ -13,6 +13,7 @@ use snow_core::emulator::MouseMode;
 use snow_core::mac::maclc::lc_475_bus;
 use snow_core::mac::maclc::pds_iie::IieDiskDevice;
 use snow_core::mac::maclc::video as lc_video;
+use snow_core::mac::mdu::rbv;
 use snow_core::mac::quadra::dafb;
 use snow_core::mac::swim::drive::DriveType;
 use snow_core::mac::{MacModel, MacMonitor, NubusDeviceKind, PdsCardKind};
@@ -296,7 +297,7 @@ impl ModelSelectionDialog {
 
     fn monitor_selectable(&self) -> bool {
         match self.selected_model {
-            MacModel::Quadra700 | MacModel::LC475 => true,
+            MacModel::Quadra700 | MacModel::LC475 | MacModel::MacIIci => true,
             MacModel::SE30 => false,
             _ => {
                 self.display_rom_required
@@ -582,6 +583,7 @@ impl ModelSelectionDialog {
                     let monitors: Vec<MacMonitor> = match self.selected_model {
                         MacModel::Quadra700 => dafb::MONITORS.to_vec(),
                         MacModel::LC475 => dafb::MONITORS_MEMCJR.to_vec(),
+                        MacModel::MacIIci => rbv::MONITORS.to_vec(),
                         // VGA and 19" monitors are not known to work with the video cards
                         _ => MacMonitor::iter()
                             .filter(|&m| m != MacMonitor::VGA && m != MacMonitor::RGB19)

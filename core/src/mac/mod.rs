@@ -20,6 +20,7 @@ pub mod localtalk_bridge;
 pub mod machine_bus;
 pub mod macii;
 pub mod maclc;
+pub mod mdu;
 pub mod nubus;
 pub mod pluskbd;
 pub mod portable;
@@ -97,6 +98,8 @@ pub enum MacModel {
     LC475,
     /// Macintosh Quadra 700
     Quadra700,
+    /// Macintosh IIci
+    MacIIci,
 }
 
 #[allow(clippy::match_like_matches_macro)]
@@ -133,6 +136,8 @@ impl MacModel {
         ("79fae48e2d5cfde68520e46616503963f8c16430903f410514b62c1379af20cb", &[Self::MacIIFDHD, Self::MacIIx, Self::MacIIcx, Self::SE30]),
         // ROMinator II
         ("adb794a53976b5ddfe7e580c4071a2f38a89d0b8583bf5d342306228c1d58a4f", &[Self::MacIIx, Self::MacIIcx, Self::SE30]),
+        // Macintosh IIci
+        ("0419966cfd7445680c0dd6ca78e8b1f4bc212e75caf56f4a5f523afa576ad3f2", &[Self::MacIIci]),
         // Macintosh LC
         ("129391cc72f84c2b321709cad8281e30a45e50b3cf6e7afe7434c4d32c7b9d5b", &[Self::LC]),
         // Macintosh LC II
@@ -166,7 +171,8 @@ impl MacModel {
             | Self::MacIIFDHD
             | Self::MacIIx
             | Self::MacIIcx
-            | Self::SE30 => 8 * 1024 * 1024,
+            | Self::SE30
+            | Self::MacIIci => 8 * 1024 * 1024,
             Self::LC | Self::LCII => 10 * 1024 * 1024,
             Self::LCIII => 36 * 1024 * 1024,
             Self::Quadra700 => 8 * 1024 * 1024,
@@ -228,6 +234,24 @@ impl MacModel {
                     128 * 1024 * 1024,
                 ]
             }
+            // Two banks of four SIMMs of 256 KB, 1, 4 or 16 MB, of which
+            // bank A must be filled, with the smaller SIMMs in bank A
+            Self::MacIIci => &[
+                1 * 1024 * 1024,
+                2 * 1024 * 1024,
+                4 * 1024 * 1024,
+                5 * 1024 * 1024,
+                8 * 1024 * 1024,
+                16 * 1024 * 1024,
+                17 * 1024 * 1024,
+                20 * 1024 * 1024,
+                32 * 1024 * 1024,
+                64 * 1024 * 1024,
+                65 * 1024 * 1024,
+                68 * 1024 * 1024,
+                80 * 1024 * 1024,
+                128 * 1024 * 1024,
+            ],
             Self::LC => &[
                 2 * 1024 * 1024,
                 4 * 1024 * 1024,
@@ -278,6 +302,7 @@ impl MacModel {
             | Self::MacIIx
             | Self::MacIIcx
             | Self::SE30
+            | Self::MacIIci
             | Self::LC
             | Self::LCII
             | Self::LCIII
@@ -308,6 +333,7 @@ impl MacModel {
             | Self::MacIIx
             | Self::MacIIcx
             | Self::SE30
+            | Self::MacIIci
             | Self::LC
             | Self::LCII
             | Self::Quadra700 => &[DriveType::SuperDrive, DriveType::SuperDrive],
@@ -354,7 +380,12 @@ impl MacModel {
             | Self::Portable
             | Self::Portable15MB => M68000,
             Self::MacII | Self::MacIIFDHD | Self::LC => M68020,
-            Self::MacIIx | Self::MacIIcx | Self::SE30 | Self::LCII | Self::LCIII => M68030,
+            Self::MacIIx
+            | Self::MacIIcx
+            | Self::SE30
+            | Self::MacIIci
+            | Self::LCII
+            | Self::LCIII => M68030,
             Self::Quadra700 | Self::LC475 => M68040,
         }
     }
@@ -386,6 +417,10 @@ impl MacModel {
             // PA1 follows.
             Self::MacII | Self::MacIIFDHD | Self::MacIIx => via::RegisterA(0xFF).with_model6(false),
             Self::MacIIcx | Self::SE30 => via::RegisterA(0xFF),
+            // ID $46 on PA6, PA4, PA2 and PA1: R32 pulls PA4 low on the
+            // boards without parity, which are the usual ones (IIci
+            // schematic). PA0 is the burn-in input.
+            Self::MacIIci => via::RegisterA(0xEF),
             // CPU ID: PA6, PA4 and PA2 high, PA1 low
             Self::LC | Self::LCII => via::RegisterA(0xD5),
             // The machine is identified by the CPU ID register
@@ -419,6 +454,7 @@ impl MacModel {
             | Self::Portable
             | Self::Portable15MB
             | Self::Classic
+            | Self::MacIIci
             | Self::LC
             | Self::LCII
             | Self::LCIII => panic!("Invalid operation for this model"),
@@ -484,6 +520,7 @@ impl Display for MacModel {
                 Self::MacIIx => "Macintosh IIx",
                 Self::MacIIcx => "Macintosh IIcx",
                 Self::SE30 => "Macintosh SE/30",
+                Self::MacIIci => "Macintosh IIci",
                 Self::LC => "Macintosh LC",
                 Self::LCII => "Macintosh LC II",
                 Self::LCIII => "Macintosh LC III",
