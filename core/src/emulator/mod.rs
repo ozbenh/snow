@@ -305,7 +305,7 @@ enum EmulatorConfig {
     Quadra700(Box<CpuM68040<MachineBus040>>),
     /// Macintosh LC 475: a 68LC040, or a 68040 in its socket
     LC475(Box<CpuM68040<MachineBus040>>),
-    /// Macintosh IIci, around the MDU and the RBV
+    /// Macintosh IIci and IIsi, around the MDU and the RBV
     Mdu(Box<CpuM68030<MachineBus020>>),
 }
 
@@ -627,7 +627,7 @@ impl Emulator {
 
                 EmulatorConfig::MacII30(cpu)
             }
-            MacModel::MacIIci => {
+            MacModel::MacIIci | MacModel::MacIIsi => {
                 assert!(override_fdd_type.is_none());
 
                 // Find extension ROM if present
@@ -645,7 +645,13 @@ impl Emulator {
                     mouse_mode,
                     ram_size,
                 );
-                let cpu = Box::new(CpuM68030::new(MachineBus020::Mdu(bus), FPU_M68882));
+                // The FPU of the IIsi is on the adapter card of its expansion slot
+                let fpu = if model == MacModel::MacIIci || fpu_enabled {
+                    FPU_M68882
+                } else {
+                    FPU_NONE
+                };
+                let cpu = Box::new(CpuM68030::new(MachineBus020::Mdu(bus), fpu));
                 assert_eq!(cpu.get_type(), model.cpu_type());
 
                 EmulatorConfig::Mdu(cpu)

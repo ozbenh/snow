@@ -297,7 +297,7 @@ impl ModelSelectionDialog {
 
     fn monitor_selectable(&self) -> bool {
         match self.selected_model {
-            MacModel::Quadra700 | MacModel::LC475 | MacModel::MacIIci => true,
+            MacModel::Quadra700 | MacModel::LC475 | MacModel::MacIIci | MacModel::MacIIsi => true,
             MacModel::SE30 => false,
             _ => {
                 self.display_rom_required
@@ -583,7 +583,7 @@ impl ModelSelectionDialog {
                     let monitors: Vec<MacMonitor> = match self.selected_model {
                         MacModel::Quadra700 => dafb::MONITORS.to_vec(),
                         MacModel::LC475 => dafb::MONITORS_MEMCJR.to_vec(),
-                        MacModel::MacIIci => rbv::MONITORS.to_vec(),
+                        MacModel::MacIIci | MacModel::MacIIsi => rbv::MONITORS.to_vec(),
                         // VGA and 19" monitors are not known to work with the video cards
                         _ => MacMonitor::iter()
                             .filter(|&m| m != MacMonitor::VGA && m != MacMonitor::RGB19)
@@ -697,6 +697,11 @@ impl ModelSelectionDialog {
                 }
                 if matches!(self.selected_model, MacModel::MacII | MacModel::MacIIFDHD) {
                     ui.checkbox(&mut self.init_args.pmmu_enabled, "Enable 68851 PMMU");
+                }
+                if self.selected_model == MacModel::MacIIsi {
+                    // On the adapter card of the expansion slot
+                    ui.checkbox(&mut self.init_args.fpu_enabled, "Enable 68882 FPU");
+                    ui.end_row();
                 }
             });
 
@@ -866,9 +871,18 @@ impl ModelSelectionDialog {
                         }
                         if !matches!(
                             self.selected_model,
-                            MacModel::LC | MacModel::LCII | MacModel::LCIII | MacModel::LC475
+                            MacModel::LC
+                                | MacModel::LCII
+                                | MacModel::LCIII
+                                | MacModel::LC475
+                                | MacModel::MacIIsi
                         ) {
                             self.init_args.fpu_enabled = false;
+                        }
+                        if !matches!(
+                            self.selected_model,
+                            MacModel::LC | MacModel::LCII | MacModel::LCIII | MacModel::LC475
+                        ) {
                             self.init_args.vram_size = None;
                             self.init_args.pds_card = PdsCardKind::None;
                         }

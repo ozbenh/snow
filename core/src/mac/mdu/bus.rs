@@ -1,9 +1,10 @@
-//! Bus of the Macintosh IIci, around the MDU (memory decode unit)
+//! Bus of the Macintosh IIci and IIsi, around the MDU (memory decode unit)
 //!
 //! The MDU decodes the address space and runs the RAM, in two banks. The
 //! RBV takes the place of VIA 2, sends the interrupts to the CPU, and shows
 //! a frame buffer in bank A. The other I/O devices are those of the Mac II
-//! family, at the same places.
+//! family, at the same places. The IIsi has an Egret on VIA 1 in place of
+//! the ADB transceiver and the RTC of the IIci.
 
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,11 +17,13 @@ use crate::bus::native_clock::{C16M_FREQUENCY, DeviceCycle, NativeClock, WaitTic
 use crate::bus::{
     Address, Bus, BusMember, InspectRun, InspectableBus, IrqSource, inspect_read_bytes,
 };
-use crate::debuggable::Debuggable;
+use crate::debuggable::{Debuggable, DebuggableProperties};
 use crate::emulator::comm::EmulatorSpeed;
 use crate::emulator::{EmuContext, MouseMode};
 use crate::keymap::KeyEvent;
 use crate::mac::adb::{AdbEvent, AdbKeyboard, AdbMouse};
+use crate::mac::egret::Egret;
+use crate::mac::maclc::via::Via as LcVia;
 use crate::mac::rtc::Rtc;
 use crate::mac::scc::{RTXC_FREQUENCY, Scc, SccCh};
 use crate::mac::scsi::controller::ScsiController;
@@ -39,10 +42,6 @@ use anyhow::Result;
 use log::*;
 use serde::{Deserialize, Serialize};
 
-/// Frequency of the bus of the real hardware, without overclocking: the
-/// 25 MHz of the 68030
-const BUS_FREQUENCY: Ticks = 25_000_000;
-
 /// Wait states of a RAM or ROM read: a random RAM read and a ROM read take
 /// five clocks (Macintosh IIci Developer Note, appendix A)
 const READ_WAITS: Ticks = 2;
@@ -55,9 +54,9 @@ const RAM_WRITE_WAITS: Ticks = 1;
 /// doesn't burst (Macintosh IIsi Developer Note, chapter 3).
 const BURST_WAITS: Ticks = 1;
 
-/// Clocks between refreshes of the RAM, every 15.6 us (Developer Note,
-/// chapter 3)
-const REFRESH_PERIOD: Ticks = BUS_FREQUENCY * 156 / 10_000_000;
+/// Time between refreshes of the RAM, 15.6 us (Developer Note, chapter 3),
+/// in ns
+const REFRESH_PERIOD_NS: Ticks = 15_600;
 
 /// Clocks a refresh holds off the next RAM cycle: it takes six, and can
 /// overlap the previous cycle by one (Developer Note, appendix A)
@@ -83,9 +82,14 @@ const BANK_B: Address = 0x0400_0000;
 /// The I/O devices repeat every 256 KB in the I/O space
 const IO_MASK: Address = 0x3_FFFF;
 
-/// Sizes of a bank of RAM: four SIMMs of 256 KB, 1, 4 or 16 MB (Macintosh
-/// IIci Developer Note, chapter 3)
+/// Sizes of a bank of RAM of the IIci: four SIMMs of 256 KB, 1, 4 or 16 MB
+/// (Macintosh IIci Developer Note, chapter 3)
 const BANK_SIZES: [usize; 4] = [1 << 20, 4 << 20, 16 << 20, 64 << 20];
+
+/// Sizes of bank B of the IIsi: empty, or four SIMMs of 256 KB, 512 KB, 1,
+/// 2, 4 or 16 MB, beside the 1 MB of bank A soldered on the board (Macintosh
+/// IIsi Developer Note, chapter 3)
+const IISI_BANK_B_SIZES: [usize; 7] = [0, 1 << 20, 2 << 20, 4 << 20, 8 << 20, 16 << 20, 64 << 20];
 
 /// What answers in a 16 MB block of the address space
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -136,10 +140,151 @@ struct Bank {
     size: usize,
 }
 
-/// Splits `ram_size` into the sizes of banks A and B, with the smaller
-/// SIMMs in bank A: "For best performance with on-board video, put the
-/// smaller SIMMs in bank A" (Macintosh IIci Developer Note, figure 3-1)
-fn bank_sizes(ram_size: usize) -> (usize, usize) {
+/// VIA 1, with what drives its port B and its shift register: the ADB
+/// transceiver and the RTC on the IIci, the Egret on the IIsi (Macintosh
+/// IIsi Developer Note, chapter 5)
+// Not boxed, which would add a pointer to follow on each tick of the VIA
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Deserialize)]
+enum Via1 {
+    Transceiver(Via),
+    Egret(LcVia, Egret),
+}
+
+impl Via1 {
+    fn new(model: MacModel) -> Self {
+        if model == MacModel::MacIIsi {
+            let mut egret = Egret::default();
+            egret.set_soft_power(true);
+            egret.adb_add_device(AdbMouse::new());
+            egret.adb_add_device(AdbKeyboard::new());
+            Self::Egret(LcVia::new(model), egret)
+        } else {
+            let mut via = Via::new(model);
+            via.adb.add_device(AdbMouse::new());
+            via.adb.add_device(AdbKeyboard::new());
+            Self::Transceiver(via)
+        }
+    }
+
+    /// RESET line. The ADB transceiver, the RTC and the Egret keep their
+    /// state.
+    fn reset(&mut self, model: MacModel) {
+        match self {
+            Self::Transceiver(via) => {
+                let Via { adb, rtc, .. } = std::mem::replace(via, Via::new(model));
+                via.adb = adb;
+                via.rtc = rtc;
+            }
+            Self::Egret(via, _) => via.reset(),
+        }
+    }
+
+    fn read(&mut self, addr: Address) -> Option<Byte> {
+        match self {
+            Self::Transceiver(via) => via.read(addr),
+            Self::Egret(via, _) => via.read(addr),
+        }
+    }
+
+    fn write(&mut self, addr: Address, val: Byte) -> Option<()> {
+        match self {
+            Self::Transceiver(via) => via.write(addr, val),
+            Self::Egret(via, _) => via.write(addr, val),
+        }
+    }
+
+    /// The head select line of the floppy drives, on PA5
+    fn sel(&self) -> bool {
+        match self {
+            Self::Transceiver(via) => via.pa().sel(),
+            Self::Egret(via, _) => via.pa().headsel(),
+        }
+    }
+
+    /// Runs a cycle of the VIA clock
+    fn tick(&mut self) -> Result<()> {
+        match self {
+            Self::Transceiver(via) => {
+                via.tick(1, ())?;
+            }
+            Self::Egret(via, egret) => {
+                via.tick(1)?;
+                let pb = via.pb();
+                egret.tick(1, pb.sys_ses(), pb.via_full(), |b| via.shift_sr(b));
+                via.b_in.set_xcvr_ses(!egret.xcvr_ses());
+            }
+        }
+        Ok(())
+    }
+
+    /// The 60.15 Hz tick on CA1
+    fn tick60(&mut self) {
+        match self {
+            Self::Transceiver(via) => via.set_line(ViaLine::CA1, LineState::Pulse),
+            Self::Egret(via, _) => via.set_line(ViaLine::CA1, LineState::Pulse),
+        }
+    }
+
+    fn irq(&self) -> bool {
+        match self {
+            Self::Transceiver(via) => via.irq(),
+            Self::Egret(via, _) => via.irq(),
+        }
+    }
+
+    fn adb_event(&mut self, event: &AdbEvent) {
+        match self {
+            Self::Transceiver(via) => via.adb.event(event),
+            Self::Egret(_, egret) => egret.adb_event(event),
+        }
+    }
+
+    fn rtc(&self) -> &Rtc {
+        match self {
+            Self::Transceiver(via) => &via.rtc,
+            Self::Egret(_, egret) => egret.rtc(),
+        }
+    }
+
+    fn rtc_mut(&mut self) -> &mut Rtc {
+        match self {
+            Self::Transceiver(via) => &mut via.rtc,
+            Self::Egret(_, egret) => egret.rtc_mut(),
+        }
+    }
+
+    fn debug_properties(&self) -> DebuggableProperties {
+        use crate::dbgprop_nest;
+        use crate::debuggable::*;
+
+        match self {
+            Self::Transceiver(via) => vec![
+                dbgprop_nest!("Apple Desktop Bus", via.adb),
+                dbgprop_nest!("VIA 1 (SY6522)", via),
+            ],
+            Self::Egret(via, egret) => vec![
+                dbgprop_nest!("Egret", egret),
+                dbgprop_nest!("VIA 1 (SY6522)", via),
+            ],
+        }
+    }
+}
+
+/// Splits `ram_size` into the sizes of banks A and B. On the IIci, the
+/// smaller SIMMs go in bank A: "For best performance with on-board video,
+/// put the smaller SIMMs in bank A" (Macintosh IIci Developer Note, figure
+/// 3-1).
+fn bank_sizes(model: MacModel, ram_size: usize) -> (usize, usize) {
+    if model == MacModel::MacIIsi {
+        let b = ram_size - (1 << 20);
+        assert!(
+            IISI_BANK_B_SIZES.contains(&b),
+            "Unsupported RAM size: {}",
+            ram_size
+        );
+        return (1 << 20, b);
+    }
     for a in BANK_SIZES {
         if a == ram_size {
             return (a, 0);
@@ -165,7 +310,7 @@ pub struct MduBus<TRenderer: Renderer> {
     pub(crate) ram: Vec<u8>,
     banks: [Bank; 2],
 
-    pub(crate) via1: Via,
+    via1: Via1,
     pub(crate) rbv: Rbv<TRenderer>,
     pub(crate) scc: Scc,
     pub(crate) asc: Asc,
@@ -222,7 +367,7 @@ where
         ram_size: Option<usize>,
     ) -> Self {
         let ram_size = ram_size.unwrap_or_else(|| model.ram_size_default());
-        let (size_a, size_b) = bank_sizes(ram_size);
+        let (size_a, size_b) = bank_sizes(model, ram_size);
         let monitor = if rbv::MONITORS.contains(&monitor) {
             monitor
         } else {
@@ -249,7 +394,7 @@ where
                     size: size_b,
                 },
             ],
-            via1: Via::new(model),
+            via1: Via1::new(model),
             rbv: Rbv::new(renderer, monitor),
             scc_ready: 0,
             ram_ready: 0,
@@ -264,7 +409,7 @@ where
 
             overlay: true,
             speed: EmulatorSpeed::Accurate,
-            native_clock: NativeClock::new(BUS_FREQUENCY),
+            native_clock: NativeClock::new(Self::model_bus_frequency(model)),
             tick60_clock: 0,
             vblank_time: Instant::now(),
             vblank_clock: 0,
@@ -274,10 +419,6 @@ where
         };
 
         bus.disable_memtest();
-
-        // Initialize ADB devices
-        bus.via1.adb.add_device(AdbMouse::new());
-        bus.via1.adb.add_device(AdbKeyboard::new());
 
         bus
     }
@@ -295,7 +436,7 @@ where
     }
 
     pub fn get_effective_speed(&self) -> f64 {
-        self.via1.rtc.effective_speed()
+        self.via1.rtc().effective_speed()
     }
 
     pub fn set_audio_provider(&mut self, provider: &mut dyn AudioProvider) -> Result<()> {
@@ -425,7 +566,7 @@ where
 
     fn via1_write(&mut self, addr: Address, _len: u32, val: u32) -> Option<()> {
         Self::dev_write(addr, val as Byte, self.via1.write(addr, val as Byte));
-        self.swim.sel = self.via1.pa().sel();
+        self.swim.sel = self.via1.sel();
         Some(())
     }
 
@@ -512,7 +653,8 @@ where
         }
         let now = self.native_clock.native_ticks() + acc.pending;
         let mut hold = self.ram_ready.saturating_sub(now);
-        let since_refresh = (now + hold) % REFRESH_PERIOD;
+        let refresh_period = self.bus_frequency() * REFRESH_PERIOD_NS / 1_000_000_000;
+        let since_refresh = (now + hold) % refresh_period;
         hold += REFRESH_HOLD.saturating_sub(since_refresh);
         if acc.addr < BANK_B {
             hold += self
@@ -528,7 +670,8 @@ where
     /// Wait states of an I/O device, fitted to BusTiming on a real IIci.
     /// The SWIM wasn't measured: it has the wait state of the Mac II
     /// family's GLUE, as does the SCSI pseudo-DMA. The Bt478 is taken to be
-    /// as fast as the RBV.
+    /// as fast as the RBV. Nothing was measured on a IIsi, whose MDU is
+    /// taken to count the same clocks at its 20 MHz.
     fn io_waits(device: Address, write: bool) -> Ticks {
         match device {
             // SCC
@@ -641,7 +784,7 @@ where
         }
 
         if button.is_some() {
-            self.via1.adb.event(&AdbEvent::Mouse(MouseEvent {
+            self.via1.adb_event(&AdbEvent::Mouse(MouseEvent {
                 button,
                 rel_movement: None,
             }));
@@ -656,7 +799,7 @@ where
                 // Handled through mouse_update_abs()
             }
             MouseMode::RelativeHw => {
-                self.via1.adb.event(&AdbEvent::Mouse(MouseEvent {
+                self.via1.adb_event(&AdbEvent::Mouse(MouseEvent {
                     button: None,
                     rel_movement: Some((relx.into(), rely.into())),
                 }));
@@ -705,10 +848,19 @@ where
         self.speed = speed;
     }
 
+    /// Frequency of the bus of the real hardware of a model: the 25 MHz of
+    /// the 68030 of the IIci, the 20 MHz of the IIsi
+    const fn model_bus_frequency(model: MacModel) -> Ticks {
+        match model {
+            MacModel::MacIIsi => 20_000_000,
+            _ => 25_000_000,
+        }
+    }
+
     /// Frequency of the bus of the real hardware, without overclocking
     #[inline(always)]
     pub const fn bus_frequency(&self) -> Ticks {
-        BUS_FREQUENCY
+        Self::model_bus_frequency(self.model)
     }
 
     /// Sets the frequency of the bus, or goes back to the one of the real
@@ -729,16 +881,16 @@ where
 
     /// Dispatches a key event to the keyboard
     pub fn keyboard_event(&mut self, ke: KeyEvent) {
-        self.via1.adb.event(&AdbEvent::Key(ke));
+        self.via1.adb_event(&AdbEvent::Key(ke));
     }
 
     /// Releases all pressed inputs
     pub fn input_release_all(&mut self) {
-        self.via1.adb.event(&AdbEvent::ReleaseAll);
+        self.via1.adb_event(&AdbEvent::ReleaseAll);
     }
 
     pub fn rtc_mut(&mut self) -> &mut Rtc {
-        &mut self.via1.rtc
+        self.via1.rtc_mut()
     }
 }
 
@@ -807,10 +959,7 @@ where
             self.disable_memtest();
         }
 
-        // Keep the RTC and ADB for PRAM and event channels
-        let Via { adb, rtc, .. } = std::mem::replace(&mut self.via1, Via::new(self.model));
-        self.via1.adb = adb;
-        self.via1.rtc = rtc;
+        self.via1.reset(self.model);
 
         self.swim.reset();
         self.scc = Scc::new(RTXC_FREQUENCY);
@@ -819,7 +968,7 @@ where
 
         self.mouse_ready = false;
         self.overlay = true;
-        self.swim.sel = self.via1.pa().sel();
+        self.swim.sel = self.via1.sel();
         Ok(false)
     }
 
@@ -867,13 +1016,13 @@ where
 
             // The VIA clock is C16M / 20 (783.36 kHz)
             if step.via_tick {
-                self.via1.tick(1, ())?;
+                self.via1.tick()?;
 
                 // 60.15 Hz interrupt, generated by the RBV
                 self.tick60_clock += 1;
                 if self.tick60_clock >= TICK60_PERIOD {
                     self.tick60_clock = 0;
-                    self.via1.set_line(ViaLine::CA1, LineState::Pulse);
+                    self.via1.tick60();
                 }
             }
         }
@@ -1001,14 +1150,14 @@ where
         use crate::dbgprop_nest;
         use crate::debuggable::*;
 
-        vec![
-            dbgprop_nest!("Apple Desktop Bus", self.via1.adb),
+        let mut props = self.via1.debug_properties();
+        props.extend([
             dbgprop_nest!("Apple Sound Chip", self.asc),
             dbgprop_nest!("RBV", self.rbv),
             dbgprop_nest!("SCSI controller (NCR 5380)", self.scsi),
             dbgprop_nest!("SWIM", self.swim),
-            dbgprop_nest!("VIA 1 (SY6522)", self.via1),
-        ]
+        ]);
+        props
     }
 }
 
@@ -1048,13 +1197,17 @@ mod tests {
 
     #[test]
     fn bank_split() {
-        assert_eq!(bank_sizes(1 << 20), (1 << 20, 0));
-        assert_eq!(bank_sizes(5 << 20), (1 << 20, 4 << 20));
-        assert_eq!(bank_sizes(8 << 20), (4 << 20, 4 << 20));
-        assert_eq!(bank_sizes(16 << 20), (16 << 20, 0));
-        assert_eq!(bank_sizes(80 << 20), (16 << 20, 64 << 20));
-        for &size in MacModel::MacIIci.ram_size_options() {
-            bank_sizes(size);
+        let ci = MacModel::MacIIci;
+        assert_eq!(bank_sizes(ci, 1 << 20), (1 << 20, 0));
+        assert_eq!(bank_sizes(ci, 5 << 20), (1 << 20, 4 << 20));
+        assert_eq!(bank_sizes(ci, 8 << 20), (4 << 20, 4 << 20));
+        assert_eq!(bank_sizes(ci, 16 << 20), (16 << 20, 0));
+        assert_eq!(bank_sizes(ci, 80 << 20), (16 << 20, 64 << 20));
+        assert_eq!(bank_sizes(MacModel::MacIIsi, 9 << 20), (1 << 20, 8 << 20));
+        for model in [MacModel::MacIIci, MacModel::MacIIsi] {
+            for &size in model.ram_size_options() {
+                bank_sizes(model, size);
+            }
         }
     }
 
