@@ -10,8 +10,7 @@
 //! PrimeTime II (LC 630, Quadra 630) is more or less PrimeTime with ATA, so this
 //! is where those are expected to start from. Only PrimeTime is here for now.
 
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::bus::access::{Bus68040, BusAccess, BusResponse, bus_access_long};
 use crate::bus::native_clock::{C16M_FREQUENCY, DeviceCycle, NativeClock};
@@ -27,6 +26,7 @@ use crate::mac::cuda::Cuda;
 use crate::mac::macii::via2::Via2;
 use crate::mac::maclc::pds_iie::{IieCardSettings, PdsIIeCard};
 use crate::mac::maclc::via::Via;
+use crate::mac::pace_frame;
 use crate::mac::quadra::dafb::{Dafb, DafbKind};
 use crate::mac::rtc::Rtc;
 use crate::mac::scc::{Scc, SccCh};
@@ -1249,27 +1249,7 @@ where
         while self.vblank_clock >= ctx.bus_frequency / 60 {
             self.vblank_clock -= ctx.bus_frequency / 60;
 
-            match self.speed {
-                EmulatorSpeed::Video => {
-                    // Sync to 60 fps video
-                    let frametime = self.vblank_time.elapsed().as_micros() as u64;
-                    const DESIRED_FRAMETIME: u64 = 1_000_000 / 60;
-                    self.vblank_time = Instant::now();
-                    if frametime < DESIRED_FRAMETIME {
-                        thread::sleep(Duration::from_micros(DESIRED_FRAMETIME - frametime));
-                    }
-                }
-                EmulatorSpeed::FastForward(max_speed) => {
-                    // Cap to the requested speedup multiplier
-                    let frametime = self.vblank_time.elapsed().as_micros() as u64;
-                    let desired_frametime = (1_000_000.0 / (60.0 * max_speed)) as u64;
-                    self.vblank_time = Instant::now();
-                    if frametime < desired_frametime {
-                        thread::sleep(Duration::from_micros(desired_frametime - frametime));
-                    }
-                }
-                _ => {}
-            }
+            pace_frame(self.speed, &mut self.vblank_time);
         }
 
         self.scc.tick(native_ticks, ctx.bus_frequency);

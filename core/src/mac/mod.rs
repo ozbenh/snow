@@ -1,4 +1,6 @@
 use std::fmt::Display;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -7,6 +9,7 @@ use swim::drive::DriveType;
 
 use crate::bus::Address;
 use crate::cpu_m68k::{CpuM68kType, M68000, M68020, M68030, M68040};
+use crate::emulator::comm::EmulatorSpeed;
 use crate::keymap::Keymap;
 use crate::tickable::Ticks;
 
@@ -32,6 +35,27 @@ pub mod sound;
 pub mod swim;
 pub mod via;
 pub mod via_common;
+
+/// Holds the Video speed to 60 frames a second, and the FastForward speed to
+/// the multiple of that asked for.
+///
+/// Sleeps until this frame is due, counted from `last_due`, when the last one
+/// was due, so that the error of the sleep does not add up.
+pub fn pace_frame(speed: EmulatorSpeed, last_due: &mut Instant) {
+    let max_speed = match speed {
+        EmulatorSpeed::Video => 1.0,
+        EmulatorSpeed::FastForward(max_speed) => max_speed,
+        _ => return,
+    };
+    let due = *last_due + Duration::from_secs_f64(1.0 / (60.0 * max_speed));
+    let now = Instant::now();
+    if now < due {
+        thread::sleep(due - now);
+        *last_due = due;
+    } else {
+        *last_due = now;
+    }
+}
 
 /// What the machine sees of a video, built-in or on a card: it owns its renderer
 pub trait VideoOutput<TRenderer> {

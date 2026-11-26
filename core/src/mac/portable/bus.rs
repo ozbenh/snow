@@ -1,5 +1,4 @@
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::normandy::Normandy;
 use super::pmgr::Pmgr;
@@ -15,6 +14,7 @@ use crate::emulator::comm::EmulatorSpeed;
 use crate::emulator::{EmuContext, MouseMode};
 use crate::keymap::KeyEvent;
 use crate::mac::adb::{AdbEvent, AdbKeyboard, AdbMouse};
+use crate::mac::pace_frame;
 use crate::mac::rtc::Rtc;
 use crate::mac::scc::{RTXC_FREQUENCY, Scc, SccCh};
 use crate::mac::scsi::controller::ScsiController;
@@ -796,15 +796,7 @@ where
             self.pmgr.tick_60hz();
 
             if self.speed == EmulatorSpeed::Video {
-                // Sync to 60 fps video
-                let frametime = self.vblank_time.elapsed().as_micros() as u64;
-                const DESIRED_FRAMETIME: u64 = 1_000_000 / 60;
-
-                self.vblank_time = Instant::now();
-
-                if frametime < DESIRED_FRAMETIME {
-                    thread::sleep(Duration::from_micros(DESIRED_FRAMETIME - frametime));
-                }
+                pace_frame(self.speed, &mut self.vblank_time);
             }
         }
 
