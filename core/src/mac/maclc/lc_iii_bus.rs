@@ -702,6 +702,12 @@ where
         BUS_FREQUENCY
     }
 
+    /// Time the machine has run, in ticks of bus_frequency(), however fast the
+    /// CPU is overclocked
+    pub fn native_ticks(&self) -> Ticks {
+        self.native_clock.native_ticks()
+    }
+
     /// Sets the frequency of the bus, or goes back to the one of the real
     /// hardware
     pub fn set_overclock(&mut self, bus_frequency: Option<u64>) {

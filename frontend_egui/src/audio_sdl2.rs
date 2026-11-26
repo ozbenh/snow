@@ -1,7 +1,9 @@
 use anyhow::{Result, anyhow};
 use sdl2::Sdl;
 use sdl2::audio::{AudioCallback, AudioDevice, AudioSpecDesired};
-use snow_core::renderer::{AudioBuffer, AudioProvider, AudioReceiver, AudioSink, ChannelAudioSink};
+use snow_core::renderer::{
+    AUDIO_QUEUE_LEN, AudioBuffer, AudioProvider, AudioReceiver, AudioSink, ChannelAudioSink,
+};
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -24,9 +26,10 @@ thread_local! {
 struct SDLAudioCallback {
     recv: AudioReceiver,
     exch: Arc<SDLAudioExchange>,
-    /// When true, play silence while waiting for the audio receiver to fill up.
-    /// Prebuffering prevents audio interruptions if the emulator doesn't deliver
-    /// samples in time for playback.
+    /// When true, play silence while waiting for the audio receiver to fill
+    /// halfway. Prebuffering prevents audio interruptions if the emulator
+    /// doesn't deliver samples in time for playback. The other half is room
+    /// for the emulator to run ahead without waiting.
     prebuffering: bool,
     /// An extra layer of buffering to solve these problems:
     /// - SDL audio buffers must have a power-of-2 length
@@ -74,7 +77,7 @@ impl AudioCallback for SDLAudioCallback {
         // Last tested on MacOS Sequoia, SDL 2.32.8.
 
         if self.prebuffering {
-            if self.recv.is_full() {
+            if self.recv.len() >= AUDIO_QUEUE_LEN / 2 {
                 self.prebuffering = false;
             } else {
                 out.fill(0.0);

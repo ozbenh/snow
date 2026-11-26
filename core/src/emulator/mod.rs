@@ -1,4 +1,5 @@
 pub mod comm;
+mod pacer;
 
 #[cfg(feature = "savestates")]
 pub mod save;
@@ -335,6 +336,8 @@ dispatch! {
         fn cpu_get_step_over(&self) -> Option<Address> { get_step_over() }
         fn speed(&self) -> EmulatorSpeed { bus.speed }
         fn effective_speed(&self) -> f64 { bus.get_effective_speed() }
+        fn native_ticks(&self) -> Ticks { bus.native_ticks() }
+        fn bus_frequency(&self) -> Ticks { bus.bus_frequency() }
         fn debug_properties(&self) -> DebuggableProperties { bus.get_debug_properties() }
     }
 
@@ -414,6 +417,8 @@ pub struct Emulator {
     memory_map_state: Option<MemoryMapState>,
     /// Last look at the memory notifiers
     memory_notify_time: Instant,
+    /// Holds the machine to its real speed in the Accurate speed
+    pacer: pacer::Pacer,
 }
 
 impl Emulator {
@@ -745,6 +750,7 @@ impl Emulator {
             memory_notifiers: BTreeMap::new(),
             memory_map_state: None,
             memory_notify_time: Instant::now(),
+            pacer: pacer::Pacer::default(),
         };
         emu.status_update()?;
 
@@ -802,6 +808,7 @@ impl Emulator {
             memory_notifiers: BTreeMap::new(),
             memory_map_state: None,
             memory_notify_time: Instant::now(),
+            pacer: pacer::Pacer::default(),
         };
         emu.status_update()?;
 
@@ -2206,10 +2213,17 @@ impl Tickable for Emulator {
                 self.replay_input.pop_front().unwrap();
             }
 
-            // Batch 10000 steps for performance reasons
+            // Batch 10000 steps for performance reasons. In the Accurate
+            // speed, run them 1000 at a time, about 1.2 ms on the slowest
+            // machines, and hold the machine to its real speed in between.
+            let paced = self.config.speed() == EmulatorSpeed::Accurate;
+            if !paced {
+                self.pacer.reset();
+            }
+            let batch = if paced { 1000 } else { 10000 };
             let mut steps = 10000;
             while steps > 0 && self.run {
-                match self.config.cpu_run_steps(steps) {
+                match self.config.cpu_run_steps(steps.min(batch)) {
                     Ok((done, reset)) => {
                         steps -= done;
                         if let Err(e) = self.after_steps(reset) {
@@ -2219,6 +2233,10 @@ impl Tickable for Emulator {
                     Err(e) => self.step_failed(&e),
                 }
                 self.poll_localtalk_bridge();
+                if paced {
+                    self.pacer
+                        .pace(self.config.native_ticks(), self.config.bus_frequency());
+                }
             }
 
             // Honour any writeback requests raised during this tick batch
@@ -2232,6 +2250,7 @@ impl Tickable for Emulator {
                     .send(EmulatorEvent::IieInFront(iie_in_front))?;
             }
         } else {
+            self.pacer.reset();
             thread::sleep(Duration::from_millis(100));
         }
 

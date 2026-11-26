@@ -1,18 +1,20 @@
 use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{BufferSize, SampleFormat, Stream, StreamConfig};
-use snow_core::renderer::{AudioBuffer, AudioProvider, AudioReceiver, AudioSink, ChannelAudioSink};
+use snow_core::renderer::{
+    AUDIO_QUEUE_LEN, AudioBuffer, AudioProvider, AudioReceiver, AudioSink, ChannelAudioSink,
+};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 struct CpalAudioCallback {
     recv: AudioReceiver,
     exch: Arc<CpalAudioExchange>,
-    /// When true, play silence while waiting for the audio receiver to fill up.
-    /// Prebuffering prevents audio interruptions if the emulator doesn't deliver
-    /// samples in time for playback.
+    /// When true, play silence while waiting for the audio receiver to fill
+    /// halfway. Prebuffering prevents audio interruptions if the emulator
+    /// doesn't deliver samples in time for playback. The other half is room
+    /// for the emulator to run ahead without waiting.
     prebuffering: bool,
     /// An extra layer of buffering to solve the problem that users may submit audio
     /// buffers that don't line up with the host's expected callback length.
@@ -29,7 +31,7 @@ impl CpalAudioCallback {
         // is the workaround for now.
 
         if self.prebuffering {
-            if self.recv.is_full() {
+            if self.recv.len() >= AUDIO_QUEUE_LEN / 2 {
                 self.prebuffering = false;
             } else {
                 out.fill(0.0);
@@ -93,10 +95,6 @@ pub struct CpalAudioStream {
     stream: Mutex<Option<Stream>>,
     channel_sink: ChannelAudioSink,
     exch: Arc<CpalAudioExchange>,
-    /// Time a sample frame plays for, and channels per frame, to pace the
-    /// emulator once the stream is dead
-    frame_time: Duration,
-    channels: usize,
 }
 
 impl CpalAudioStream {
@@ -169,8 +167,6 @@ impl CpalAudioStream {
             stream: Mutex::new(Some(stream)),
             channel_sink,
             exch,
-            frame_time: Duration::from_secs(1) / freq as u32,
-            channels: usize::from(channels),
         })
     }
 
@@ -213,10 +209,6 @@ struct CpalAudioStreamSink {
 impl AudioSink for CpalAudioStreamSink {
     fn send(&self, buffer: AudioBuffer) -> Result<()> {
         if self.stream.is_dead() {
-            // Take the time the samples would play for, as the emulator paces
-            // itself on the audio
-            let frames = (buffer.len() / self.stream.channels) as u32;
-            std::thread::sleep(self.stream.frame_time * frames);
             return Ok(());
         }
         self.stream.channel_sink.send(buffer)
