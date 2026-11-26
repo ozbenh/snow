@@ -31,6 +31,13 @@ pub trait AudioProvider: Send {
         channels: u8,
         samples: u16,
     ) -> Result<Box<dyn AudioSink>>;
+
+    /// Blocks queued to the host on the first stream, or None when it is not
+    /// playing. The emulator holds this at half the queue in the Accurate
+    /// speed.
+    fn queued_blocks(&self) -> Option<usize> {
+        None
+    }
 }
 
 /// Audio sink for produced buffers
@@ -54,6 +61,11 @@ impl ChannelAudioSink {
 
     pub fn receiver(&self) -> AudioReceiver {
         self.receiver.clone()
+    }
+
+    /// Blocks in the queue
+    pub fn queued(&self) -> usize {
+        self.receiver.len()
     }
 
     /// Clears/flushes the entire current content in the sink

@@ -33,6 +33,7 @@ impl CpalAudioCallback {
         if self.prebuffering {
             if self.recv.len() >= AUDIO_QUEUE_LEN / 2 {
                 self.prebuffering = false;
+                self.exch.playing.store(true, Ordering::Relaxed);
             } else {
                 out.fill(0.0);
                 return;
@@ -76,6 +77,7 @@ impl CpalAudioCallback {
             self.active_samples.clear();
 
             self.prebuffering = true;
+            self.exch.playing.store(false, Ordering::Relaxed);
             self.exch.underrun.store(true, Ordering::Relaxed);
         }
     }
@@ -86,6 +88,8 @@ impl CpalAudioCallback {
 struct CpalAudioExchange {
     mute: AtomicBool,
     underrun: AtomicBool,
+    /// The callback plays from the queue, rather than wait for it to fill
+    playing: AtomicBool,
     /// The stream had an error, and is given up
     dead: AtomicBool,
 }
@@ -193,6 +197,12 @@ impl CpalAudioStream {
         self.exch.underrun.load(Ordering::Relaxed)
     }
 
+    /// Blocks queued, or None when the stream doesn't play from the queue
+    fn queued_blocks(&self) -> Option<usize> {
+        (!self.is_dead() && self.exch.playing.load(Ordering::Relaxed))
+            .then(|| self.channel_sink.queued())
+    }
+
     pub fn is_muted(&self) -> bool {
         self.exch.mute.load(Ordering::Relaxed)
     }
@@ -277,5 +287,9 @@ impl AudioProvider for CpalAudioProvider {
         self.streams.push(stream.clone());
         let stream_sink = CpalAudioStreamSink { stream };
         Ok(Box::new(stream_sink))
+    }
+
+    fn queued_blocks(&self) -> Option<usize> {
+        self.streams.first()?.queued_blocks()
     }
 }

@@ -2234,8 +2234,15 @@ impl Tickable for Emulator {
                 }
                 self.poll_localtalk_bridge();
                 if paced {
-                    self.pacer
-                        .pace(self.config.native_ticks(), self.config.bus_frequency());
+                    let queued = self
+                        .audio_provider
+                        .as_ref()
+                        .and_then(|p| p.lock().unwrap().queued_blocks());
+                    self.pacer.pace(
+                        self.config.native_ticks(),
+                        self.config.bus_frequency(),
+                        queued,
+                    );
                 }
             }
 
