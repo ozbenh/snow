@@ -233,9 +233,12 @@ where
     }
 
     pub fn set_audio_provider(&mut self, provider: &mut dyn AudioProvider) -> Result<()> {
-        // The sample rate is 22.257 kHz, rounded down to a commonly used value
         let sink = provider
-            .create_stream(22050, AUDIO_CHANNELS as u8, AUDIO_BUFFER_SAMPLES as u16)
+            .create_stream(
+                (C16M_FREQUENCY / self.sound.sample_period()) as i32,
+                AUDIO_CHANNELS as u8,
+                AUDIO_BUFFER_SAMPLES as u16,
+            )
             .unwrap_or_else(|_| null_audio_sink());
         self.sound.set_sink(sink);
 

@@ -227,7 +227,11 @@ where
 
     pub fn set_audio_provider(&mut self, provider: &mut dyn AudioProvider) -> Result<()> {
         let sink = provider
-            .create_stream(22050, AUDIO_CHANNELS as u8, AUDIO_BUFFER_SAMPLES as u16)
+            .create_stream(
+                (C16M_FREQUENCY / self.asc.sample_period()) as i32,
+                AUDIO_CHANNELS as u8,
+                AUDIO_BUFFER_SAMPLES as u16,
+            )
             .unwrap_or_else(|_| null_audio_sink());
         self.asc.set_sink(sink);
 

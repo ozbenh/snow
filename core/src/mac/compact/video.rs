@@ -70,7 +70,7 @@ const H_VISIBLE_DOTS: usize = 512;
 const HBLANK_DOTS: usize = 192;
 
 /// Total scanline length, including HBlank, in dots.
-const H_DOTS: usize = H_VISIBLE_DOTS + HBLANK_DOTS;
+pub const H_DOTS: usize = H_VISIBLE_DOTS + HBLANK_DOTS;
 
 /// Visible lines in one frame
 const V_VISIBLE_LINES: usize = 342;

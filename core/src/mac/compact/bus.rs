@@ -2,9 +2,9 @@ use std::ops::Range;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::video::Video;
+use super::video::{H_DOTS, Video};
 use crate::bus::access::{Bus68000, BusAccess, BusResponse, bus_access_byte_lane, bus_access_word};
-use crate::bus::native_clock::{C8M_PER_VIA, DeviceCycle, NativeClock};
+use crate::bus::native_clock::{C8M_PER_VIA, C16M_FREQUENCY, DeviceCycle, NativeClock};
 use crate::bus::{
     Address, Bus, BusMember, InspectRun, InspectableBus, IrqSource, inspect_read_bytes,
 };
@@ -255,11 +255,13 @@ where
     }
 
     pub fn set_audio_provider(&mut self, provider: &mut dyn AudioProvider) -> Result<()> {
-        // Audio sample frequency is tied to monitor's horizontal sync
-        // 370 horizontal lines * 60.147 frames/sec = 22.254 KHz
-        // Round down to a safe commonly used value (22050), 0.9% off
+        // One sample per scanline of H_DOTS dots of the 15.6672 MHz dot clock: 22254.5 Hz
         let sink = provider
-            .create_stream(22050, AUDIO_CHANNELS as u8, AUDIO_BUFFER_SAMPLES as u16)
+            .create_stream(
+                (C16M_FREQUENCY / H_DOTS as Ticks) as i32,
+                AUDIO_CHANNELS as u8,
+                AUDIO_BUFFER_SAMPLES as u16,
+            )
             .unwrap_or_else(|_| null_audio_sink());
         self.audio.set_sink(sink);
 

@@ -350,11 +350,12 @@ where
     }
 
     pub fn set_audio_provider(&mut self, provider: &mut dyn AudioProvider) -> Result<()> {
-        // Audio sample frequency is tied to monitor's horizontal sync
-        // 370 horizontal lines * 60.147 frames/sec = 22.254 KHz
-        // Round down to a safe commonly used value (22050), 0.9% off
         let sink = provider
-            .create_stream(22050, AUDIO_CHANNELS as u8, AUDIO_BUFFER_SAMPLES as u16)
+            .create_stream(
+                (C16M_FREQUENCY / self.asc.sample_period()) as i32,
+                AUDIO_CHANNELS as u8,
+                AUDIO_BUFFER_SAMPLES as u16,
+            )
             .unwrap_or_else(|_| null_audio_sink());
         self.asc.set_sink(sink);
 
