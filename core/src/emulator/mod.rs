@@ -2243,6 +2243,11 @@ impl Tickable for Emulator {
                         self.config.bus_frequency(),
                         queued,
                     );
+                    // Take the input that came during the batch or the sleep
+                    // now, rather than up to 10000 steps later
+                    if !self.command_recv.is_empty() {
+                        break;
+                    }
                 }
             }
 
