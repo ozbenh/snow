@@ -795,9 +795,7 @@ where
             self.via.set_line(ViaLine::CA1, LineState::Pulse);
             self.pmgr.tick_60hz();
 
-            if self.speed == EmulatorSpeed::Video {
-                pace_frame(self.speed, &mut self.vblank_time);
-            }
+            pace_frame(self.speed, &mut self.vblank_time);
         }
 
         self.asc_clock += native_ticks * C16M_FREQUENCY;
